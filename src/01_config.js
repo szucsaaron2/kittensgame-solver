@@ -10,6 +10,18 @@
         faithPraiseReserve: 0,
         speedMultiplier: 1,
         terminalGoal: null,
+        // ── Beam search ──────────────────────────────────────────────────────
+        beamEnabled:        true,
+        beamDepth:          3,
+        beamWidth:          4,
+        beamBudgetMs:       400,
+        beamCandidateMode:  'goalAware',   // 'goalAware' | 'frontier'
+        beamMaxCandidates:  10,
+        // ── OR-picker fanout weighting ───────────────────────────────────────
+        // _leafCount's OR selector divides each option's leaf-cost by
+        // (1 + fanoutWeight × effectiveFanout). 0 recovers the legacy
+        // cheapest-chain-by-count behavior; 1 biases strongly toward gateways.
+        fanoutWeight:       1.0,
     };
 
     function saveCfg() {

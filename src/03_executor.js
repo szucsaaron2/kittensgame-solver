@@ -28,6 +28,7 @@
                 try { game.updateCaches(); } catch (ue) {
                     console.warn('[EXEC] updateCaches threw for ' + action.key + ':', ue.message);
                 }
+                if (typeof markEdgeGraphDirty === 'function') markEdgeGraphDirty();
             }
         } catch (e) {
             console.error('[EXEC] executeAction failed for ' + action.key + ':', e.message, e.stack);

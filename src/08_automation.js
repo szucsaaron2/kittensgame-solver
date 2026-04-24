@@ -498,6 +498,10 @@
         // new season (winter's -catnip swing is huge).  Wait 5s, then mark
         // for recalc on the next cycle.
         var currentSeason = gamePage.calendar ? gamePage.calendar.season : -1;
+        // Spring (season 0) entry from winter (season 3): immediate reset.
+        // Winter's scarcity skew makes the in-place nudge logic slow to
+        // reconverge on the optimal spring distribution.
+        var springWakeup = (_lastSeasonForJobs === 3 && currentSeason === 0);
         if (_lastSeasonForJobs !== -1 && _lastSeasonForJobs !== currentSeason) {
             _seasonChangeTimeForJobs = Date.now();
             _seasonRecalculated = false;
@@ -508,6 +512,14 @@
             (Date.now() - _seasonChangeTimeForJobs > _effectiveCooldown(5000))) {
             delayedSeasonChange = true;
             _seasonRecalculated = true;
+        }
+        if (springWakeup) {
+            delayedSeasonChange = true;
+            _seasonRecalculated = true;
+            // Wipe winter's biases so the recompute starts fresh.
+            _catnipRateEMA = null;
+            _lastFarmerAddTime = 0;
+            _cappedJobs = {};
         }
 
         updateCatnipEMA();
@@ -531,7 +543,9 @@
             _lastFarmerAddTime = 0;
             // Recompute with pre-clear farmer count so the EMA logic doesn't
             // see "0 farmers → crisis" right after the wipe.
-            result = computeJobTargets(available, total, preClearFarmers);
+            // Exception: spring wakeup — force a full recompute from zero so
+            // winter's farmer pile doesn't re-seed the new distribution.
+            result = computeJobTargets(available, total, springWakeup ? 0 : preClearFarmers);
             targets = result.targets;
         }
 

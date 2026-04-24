@@ -26,6 +26,13 @@
         faithPraiseReserve: 0,
         speedMultiplier: 1,
         terminalGoal: null,
+        // ── Beam search ──────────────────────────────────────────────────────
+        beamEnabled:        true,
+        beamDepth:          3,
+        beamWidth:          4,
+        beamBudgetMs:       400,
+        beamCandidateMode:  'goalAware',   // 'goalAware' | 'frontier'
+        beamMaxCandidates:  10,
     };
 
     function saveCfg() {
@@ -328,6 +335,7 @@
                 try { game.updateCaches(); } catch (ue) {
                     console.warn('[EXEC] updateCaches threw for ' + action.key + ':', ue.message);
                 }
+                if (typeof markEdgeGraphDirty === 'function') markEdgeGraphDirty();
             }
         } catch (e) {
             console.error('[EXEC] executeAction failed for ' + action.key + ':', e.message, e.stack);
@@ -789,6 +797,204 @@
         return true;
     }
 
+
+    // =========================================================================
+    //  [G3] ALGEBRAIC STATE — closed-form state transitions for beam search
+    //
+    //  A plain-data snapshot of {resources, rates, caps, unlocks, tps} that
+    //  supports arithmetic state transitions without running the game tick loop.
+    //
+    //  RATES are stored in per-SECOND units: perTickCached × ticksPerSecond.
+    //  RATIO provides are applied multiplicatively to current rate (first-order
+    //  approx: new_rate = old_rate × (1 + delta_ratio), accurate within ~5%
+    //  for typical mid-game stacking).
+    //
+    //  perUnitProvides (added to building nodes in 06_edges.js) gives the
+    //  MARGINAL effect of ONE additional building, not the total for val copies.
+    // =========================================================================
+
+    // ── Snapshot ─────────────────────────────────────────────────────────────
+    function snapshotAlgebraicState(game, eg) {
+        var tps = game.ticksPerSecond || 5;
+        var resources = {}, rates = {}, caps = {}, unlocks = {};
+
+        var resList = game.resPool.resources;
+        for (var i = 0; i < resList.length; i++) {
+            var r = resList[i];
+            resources[r.name] = r.value   || 0;
+            rates[r.name]     = (r.perTickCached || 0) * tps;
+            caps[r.name]      = r.maxValue || 0;
+        }
+
+        if (eg) {
+            var ids = Object.keys(eg.nodes);
+            for (var j = 0; j < ids.length; j++) {
+                if (eg.nodes[ids[j]].state === 'done') unlocks[ids[j]] = true;
+            }
+        }
+
+        return { resources: resources, rates: rates, caps: caps,
+                 unlocks: unlocks, elapsed: 0, tps: tps };
+    }
+
+    function _cloneAlgState(s) {
+        return {
+            resources: Object.assign({}, s.resources),
+            rates:     Object.assign({}, s.rates),
+            caps:      Object.assign({}, s.caps),
+            unlocks:   Object.assign({}, s.unlocks),
+            elapsed:   s.elapsed,
+            tps:       s.tps || 5
+        };
+    }
+
+    // ── Analytical ETA in symbolic state ─────────────────────────────────────
+    // Mirrors timeToAfford() from 07_chain.js but operates entirely on the
+    // algebraic state — no game object access.
+    function timeToAffordInState(state, prices, craftsByOutput, seen) {
+        if (!prices || prices.length === 0) return { secs: 0, capLimited: false };
+        seen = seen || {};
+        var total = 0;
+        var capLimited = false;
+
+        for (var i = 0; i < prices.length; i++) {
+            var p       = prices[i];
+            var have    = state.resources[p.name] || 0;
+            var rate    = state.rates[p.name]     || 0;
+            var cap     = state.caps[p.name]      || 0;
+            var deficit = p.val - have;
+            if (deficit <= 0) continue;
+
+            var craft = craftsByOutput ? craftsByOutput[p.name] : null;
+            var craftSecs = Infinity;
+            if (craft && !seen[p.name]) {
+                var perUnit  = craft.output.amt || 1;
+                var batches  = Math.ceil(deficit / perUnit);
+                var nextSeen = Object.assign({}, seen);
+                nextSeen[p.name] = true;
+                var perBatch = timeToAffordInState(state, craft.inputs, craftsByOutput, nextSeen);
+                if (!perBatch.capLimited && perBatch.secs !== Infinity) {
+                    craftSecs = batches * perBatch.secs;
+                }
+            }
+
+            var prodSecs = Infinity;
+            var capOk    = (cap <= 0) || (cap >= p.val);
+            if (rate > 0 && capOk) {
+                prodSecs = deficit / rate;
+            } else if (!capOk && !craft) {
+                capLimited = true;
+            }
+
+            var thisSecs = Math.min(craftSecs, prodSecs);
+            if (thisSecs === Infinity) return { secs: Infinity, capLimited: capLimited };
+            if (thisSecs > total) total = thisSecs;
+        }
+        return { secs: total, capLimited: capLimited };
+    }
+
+    // ── Symbolic state transition ────────────────────────────────────────────
+    // Apply the effect of acquiring `node` to `state`.
+    // Uses node.perUnitProvides (marginal: 1 building) for production/storage/ratio.
+    // Returns the new state, or null if the node's cost is unreachable.
+    function applyActionSymbolic(state, node, craftsByOutput) {
+        var cost = (node.state === 'locked-ui') ? node.unlockPrice : node.price;
+        var etaResult = cost ? timeToAffordInState(state, cost, craftsByOutput) : { secs: 0 };
+        if (etaResult.secs === Infinity) return null;
+        var eta = etaResult.secs;
+        var tps = state.tps || 5;
+
+        var next = _cloneAlgState(state);
+        next.elapsed += eta;
+
+        // 1. Advance resources by eta at current rates.
+        for (var r in next.rates) {
+            if (!next.rates[r]) continue;
+            var cap  = next.caps[r] || 0;
+            var proj = next.resources[r] + next.rates[r] * eta;
+            next.resources[r] = (cap > 0) ? Math.min(proj, cap) : proj;
+        }
+
+        // 2. Pay cost.
+        if (cost) {
+            for (var i = 0; i < cost.length; i++) {
+                next.resources[cost[i].name] = (next.resources[cost[i].name] || 0) - cost[i].val;
+            }
+        }
+
+        // 3. Apply marginal provides.
+        var prov = node.perUnitProvides || node.provides;
+
+        // 3a. Flat rate additions. _provideEntries stores per-tick values; convert × tps.
+        if (prov && prov.resources) {
+            for (var i = 0; i < prov.resources.length; i++) {
+                var e = prov.resources[i];
+                next.rates[e.res] = (next.rates[e.res] || 0) + e.rate * tps;
+            }
+        }
+
+        // 3b. Storage cap increases.
+        if (prov && prov.storage) {
+            for (var i = 0; i < prov.storage.length; i++) {
+                var e = prov.storage[i];
+                next.caps[e.res] = (next.caps[e.res] || 0) + e.amount;
+            }
+        }
+
+        // 3c. Ratio multipliers: first-order new_rate = old_rate × (1 + delta).
+        if (prov && prov.ratios) {
+            for (var i = 0; i < prov.ratios.length; i++) {
+                var e = prov.ratios[i];
+                if (e.kind === 'ratio') {
+                    next.rates[e.res] = (next.rates[e.res] || 0) * (1 + e.amount);
+                }
+            }
+        }
+
+        // 4. Mark node and its unlock targets as done in symbolic unlocks.
+        next.unlocks[node.id] = true;
+        if (node.provides && node.provides.unlocks) {
+            for (var i = 0; i < node.provides.unlocks.length; i++) {
+                next.unlocks[node.provides.unlocks[i]] = true;
+            }
+        }
+
+        return next;
+    }
+
+    // ── Console test helpers ─────────────────────────────────────────────────
+    if (typeof window !== "undefined") {
+        window.__snapshotAlgebraicState = function () {
+            var eg = (typeof getCachedEdgeGraph === 'function') ? getCachedEdgeGraph(gamePage) : null;
+            return snapshotAlgebraicState(gamePage, eg);
+        };
+
+        // window.__testTTAS(prices, optState)
+        window.__testTTAS = function (prices, state) {
+            var s   = state || window.__snapshotAlgebraicState();
+            var idx = {};
+            try {
+                var eg = getCachedEdgeGraph(gamePage);
+                var scrape = eg.__scrape || scrapeGraph(gamePage);
+                idx = _indexCraftsByOutput(scrape, gamePage);
+            } catch (e) {}
+            return timeToAffordInState(s, prices, idx);
+        };
+
+        // window.__applySymbolic('bld:field')
+        window.__applySymbolic = function (nodeId) {
+            var eg = (typeof getCachedEdgeGraph === 'function') ? getCachedEdgeGraph(gamePage) : null;
+            if (!eg) return null;
+            var node = eg.nodes[nodeId];
+            if (!node) { console.warn('[__applySymbolic] unknown nodeId:', nodeId); return null; }
+            var state  = snapshotAlgebraicState(gamePage, eg);
+            var scrape = eg.__scrape || scrapeGraph(gamePage);
+            var idx    = _indexCraftsByOutput(scrape, gamePage);
+            var next   = applyActionSymbolic(state, node, idx);
+            if (!next) console.warn('[__applySymbolic] unreachable (Infinity ETA) for', nodeId);
+            return next;
+        };
+    }
 
     // =========================================================================
     //  [GRAPH] DIAGNOSTIC SCRAPE DUMP
@@ -1925,7 +2131,8 @@
     // ── node constructors ────────────────────────────────────────────────
     function _bldNode(game, b) {
         var done = false;
-        var prov = _provideEntries(b.effects, b.val || 0);
+        var prov     = _provideEntries(b.effects, b.val || 0);
+        var provUnit = _provideEntries(b.effects, 1);
         // For buildings, "done" is ambiguous (can always build more).  Mark
         // done only if the building is single-purpose (no price-ratio scaling
         // and already present).  Otherwise leave as incremental — planner
@@ -1944,6 +2151,10 @@
                 resources: prov.resources, storage: prov.storage,
                 ratios: prov.ratios, con: prov.con,
                 unlocks: [] // filled after
+            },
+            perUnitProvides: {
+                resources: provUnit.resources, storage: provUnit.storage,
+                ratios: provUnit.ratios, con: provUnit.con
             },
             rawUnlocks: b.unlocks
         };
@@ -2052,7 +2263,8 @@
     }
 
     function _spaceBldNode(game, b) {
-        var prov = _provideEntries(b.effects, b.val || 0);
+        var prov     = _provideEntries(b.effects, b.val || 0);
+        var provUnit = _provideEntries(b.effects, 1);
         var canAfford = _canAfford(game, b.prices);
         return {
             id: _id("space_bld", b.name),
@@ -2068,6 +2280,10 @@
             provides: {
                 resources: prov.resources, storage: prov.storage,
                 ratios: prov.ratios, con: prov.con, unlocks: []
+            },
+            perUnitProvides: {
+                resources: provUnit.resources, storage: provUnit.storage,
+                ratios: provUnit.ratios, con: provUnit.con
             },
             rawUnlocks: b.unlocks
         };
@@ -2132,6 +2348,17 @@
 
         function add(n) {
             if (!n) return;
+            // Ensure every node has a perUnitProvides field so applyActionSymbolic
+            // can read it without null-checks per kind. For non-scaling kinds the
+            // marginal effect of "acquiring one" equals provides directly.
+            if (!n.perUnitProvides) {
+                n.perUnitProvides = {
+                    resources: n.provides.resources,
+                    storage:   n.provides.storage,
+                    ratios:    n.provides.ratios,
+                    con:       n.provides.con
+                };
+            }
             nodes[n.id] = n;
             for (var i = 0; i < n.provides.resources.length; i++) {
                 var r = n.provides.resources[i].res;
@@ -2326,10 +2553,44 @@
         return eg.nodes[id] || null;
     }
 
+    // ── Edge graph cache ─────────────────────────────────────────────────────
+    // Rebuilds are expensive (scrape + link-build over 300+ nodes each cycle).
+    // We cache and only rebuild when game state mutates (action executed) or
+    // EG_FORCE_INTERVAL cycles elapse as a safety net against stale nodes.
+    var _egCache              = null;
+    var _egDirty              = true;
+    var _egCyclesSinceRebuild = 0;
+    var EG_FORCE_INTERVAL     = 10;
+
+    function markEdgeGraphDirty() {
+        _egDirty = true;
+    }
+
+    function getCachedEdgeGraph(game) {
+        _egCyclesSinceRebuild++;
+        var forceRebuild = (_egCyclesSinceRebuild >= EG_FORCE_INTERVAL);
+        if (_egDirty || !_egCache || forceRebuild) {
+            var scrape = scrapeGraph(game);
+            _egCache = buildEdgeGraph(game, scrape);
+            _egCache.__scrape = scrape;
+            _egDirty = false;
+            _egCyclesSinceRebuild = 0;
+        }
+        return _egCache;
+    }
+
     if (typeof window !== "undefined") {
         window.__buildEdgeGraph = function () { return buildEdgeGraph(gamePage, scrapeGraph(gamePage)); };
         window.__dumpEdgeGraph  = dumpEdgeGraph;
         window.__listNodeIds    = function () { return listAllNodeIds(window.__buildEdgeGraph()); };
+        window.__egCacheInfo    = function () {
+            return {
+                dirty:     _egDirty,
+                cycles:    _egCyclesSinceRebuild,
+                cached:    !!_egCache,
+                nodeCount: _egCache ? Object.keys(_egCache.nodes).length : 0
+            };
+        };
     }
 
     // =========================================================================
@@ -2359,23 +2620,124 @@
         return false;
     }
 
+    // Return {inputs, outputAmt} for an unlocked craft producing resName, or null.
+    function _craftRecipeFor(game, resName) {
+        if (!game || !game.workshop || !game.workshop.crafts) return null;
+        var crafts = game.workshop.crafts;
+        for (var i = 0; i < crafts.length; i++) {
+            var c = crafts[i];
+            if (c.name !== resName || !c.unlocked) continue;
+            var inputs = null;
+            try { inputs = game.workshop.getCraftPrice(c); } catch (e) { }
+            if (!inputs) inputs = c.prices || [];
+            var ratio = 0;
+            try { ratio = game.getResCraftRatio({ name: c.name }) || 0; } catch (e) { }
+            var amt = 1 + (c.ignoreBonuses ? 0 : ratio);
+            return { inputs: inputs, outputAmt: amt };
+        }
+        return null;
+    }
+
+    // Walk a cost array and accumulate *prod-limited* helper node ids —
+    // producers we should consider building/unlocking.  A cost entry blocks
+    // if: (stockpile insufficient) AND (no production rate) AND (not
+    // craftable).  If craftable, recurse into the scaled input cost so
+    // transitive blocks surface too (e.g. warehouse→slab→minerals).
+    function _gatherProdHelpers(game, eg, cost, helpers, seen) {
+        if (!cost) return;
+        for (var ci = 0; ci < cost.length; ci++) {
+            var p = cost[ci];
+            if (seen[p.name]) continue;
+            seen[p.name] = true;
+            var r = game.resPool.get(p.name);
+            if (!r) continue;
+            if ((r.value || 0) >= p.val) continue;
+            var recipe = _craftRecipeFor(game, p.name);
+            if (recipe) {
+                var perUnit = recipe.outputAmt || 1;
+                var deficit = p.val - (r.value || 0);
+                var batches = Math.max(1, Math.ceil(deficit / perUnit));
+                var scaled = [];
+                for (var k = 0; k < recipe.inputs.length; k++) {
+                    scaled.push({ name: recipe.inputs[k].name, val: recipe.inputs[k].val * batches });
+                }
+                _gatherProdHelpers(game, eg, scaled, helpers, seen);
+            } else if ((r.perTickCached || 0) <= 0) {
+                var producers = (eg.producersOf && eg.producersOf[p.name]) || [];
+                for (var pi2 = 0; pi2 < producers.length; pi2++) {
+                    var pid = producers[pi2];
+                    var pNode = eg.nodes[pid];
+                    if (pNode && pNode.state !== "done"
+                        && helpers.indexOf(pid) < 0) {
+                        helpers.push(pid);
+                    }
+                }
+            }
+        }
+    }
+
     function _chainEntry(id, st, extra) {
         var e = { id: id, state: st, children: [] };
         if (extra) for (var k in extra) e[k] = extra[k];
         return e;
     }
 
-    // Count actionable leaves under an entry (for OR-branch scoring).
+    // Count actionable leaves reachable from an entry.  Walks raw
+    // options/andReqs (set in first pass) rather than e.children (which is
+    // still being populated during the picker loop).  Uses an in-progress
+    // Infinity sentinel so cycles back to self return Inf instead of masking
+    // as cheap — critical for goals whose cap-raisers transitively depend on
+    // the goal itself (e.g. theology cap-limited by science, observatory
+    // raises science cap, observatory needs astronomy, astronomy needs
+    // theology).  Also returns Inf for dead-end locked-prereq nodes whose
+    // unlocker edges aren't modeled in the graph (race/mission gates).
     function _leafCount(entries, id, memo) {
         if (memo[id] !== undefined) return memo[id];
-        memo[id] = 1; // cycle guard: any re-entry costs 1
+        memo[id] = Infinity; // in-progress sentinel → cycle ⇒ Infinity
         var e = entries[id];
-        if (!e) return 1;
-        if (e.done || e.cycle) { memo[id] = 0; return 0; }
-        if (e.children.length === 0) { memo[id] = 1; return 1; }
-        var n = 0;
-        for (var i = 0; i < e.children.length; i++) n += _leafCount(entries, e.children[i], memo);
-        if (n === 0) n = 1;
+        if (!e)               { memo[id] = 1;        return 1; }
+        if (e.done)           { memo[id] = 0;        return 0; }
+        if (e.cycle)          { memo[id] = Infinity; return Infinity; }
+
+        var n;
+        var hasCapOrProd = (e.capLimited || e.prodLimited) && e.options && e.options.length;
+        if (hasCapOrProd) {
+            // Cap/prod-limited actionable leaf: MIN over synthesized helpers.
+            n = Infinity;
+            for (var i = 0; i < e.options.length; i++) {
+                var c = _leafCount(entries, e.options[i], memo);
+                if (c < n) n = c;
+            }
+        } else if (e.state === "ready" || e.state === "locked-cost" || e.state === "locked-ui") {
+            // Plain actionable leaf = 1 leaf.
+            n = 1;
+        } else if (e.state === "locked-prereq") {
+            var hasAnd = e.andReqs && e.andReqs.length > 0;
+            var hasOr  = e.options && e.options.length > 0;
+            if (!hasAnd && !hasOr) {
+                n = Infinity; // dead-end: no unlocker modeled
+            } else {
+                n = 0;
+                if (hasAnd) {
+                    for (var i = 0; i < e.andReqs.length; i++) {
+                        var c = _leafCount(entries, e.andReqs[i], memo);
+                        if (c === Infinity) { n = Infinity; break; }
+                        n += c;
+                    }
+                }
+                if (n !== Infinity && hasOr) {
+                    var best = Infinity;
+                    for (var j = 0; j < e.options.length; j++) {
+                        var c = _leafCount(entries, e.options[j], memo);
+                        if (c < best) best = c;
+                    }
+                    if (best === Infinity) n = Infinity;
+                    else n += best;
+                }
+            }
+        } else {
+            n = 1;
+        }
         memo[id] = n;
         return n;
     }
@@ -2407,42 +2769,37 @@
                 var capRaisers = [];
                 var prodHelpers = [];
                 if (cost) {
+                    // Cap-limited: direct cost only (caps don't compose
+                    // through crafts — a craft consumes its inputs, so the
+                    // craft output's cap doesn't constrain anything).
                     for (var ci = 0; ci < cost.length; ci++) {
                         var p = cost[ci];
                         var r = game.resPool.get(p.name);
                         if (!r) continue;
-
-                        // Cap-limited check.
                         if (r.maxValue && p.val > r.maxValue) {
                             var raisers = (eg.capRaisersOf && eg.capRaisersOf[p.name]) || [];
                             for (var ri = 0; ri < raisers.length; ri++) {
                                 var rNode = eg.nodes[raisers[ri]];
                                 if (rNode && rNode.state !== "done"
+                                    && raisers[ri] !== id
                                     && capRaisers.indexOf(raisers[ri]) < 0) {
                                     capRaisers.push(raisers[ri]);
                                 }
                             }
                         }
-
-                        // Prod-limited check: stockpile can't cover, not craftable
-                        // (no workshop recipe for this resource), no production rate.
-                        // Craftable resources have their own chain via
-                        // timeToAfford/resolveRawCost, so skip those here —
-                        // catnip is handled by the craft's input chain.
-                        var craftable = _isCraftableResource(game, p.name);
-                        var hasRate = (r.perTickCached || 0) > 0;
-                        var stockpileCovers = (r.value || 0) >= p.val;
-                        if (!stockpileCovers && !craftable && !hasRate) {
-                            var producers = (eg.producersOf && eg.producersOf[p.name]) || [];
-                            for (var pi2 = 0; pi2 < producers.length; pi2++) {
-                                var pNode = eg.nodes[producers[pi2]];
-                                if (pNode && pNode.state !== "done"
-                                    && prodHelpers.indexOf(producers[pi2]) < 0) {
-                                    prodHelpers.push(producers[pi2]);
-                                }
-                            }
-                        }
                     }
+                    // Prod-limited: recurse through craft inputs so a
+                    // transitive block surfaces (e.g. warehouse→slab→minerals
+                    // — minerals have no rate, so slab can't be crafted, so
+                    // warehouse is really blocked on a mineral producer).
+                    _gatherProdHelpers(game, eg, cost, prodHelpers, {});
+                    // Filter self-reference (a building can't be its own
+                    // producer — would collapse to a cycle stub).
+                    var filtered = [];
+                    for (var fi = 0; fi < prodHelpers.length; fi++) {
+                        if (prodHelpers[fi] !== id) filtered.push(prodHelpers[fi]);
+                    }
+                    prodHelpers = filtered;
                 }
                 var allOpts = capRaisers.concat(prodHelpers);
                 if (allOpts.length > 0) {
@@ -2482,35 +2839,17 @@
         //   children = AND-required ids (all) + picked OR option (one).
         //   Pick OR option with smallest subtree (leaf count), tiebreak on depth.
         var leafMemo = {};
-        var depthMemo = {};
-        function depthOf(id) {
-            if (depthMemo[id] !== undefined) return depthMemo[id];
-            depthMemo[id] = 0;
-            var e = entries[id]; if (!e) return 1;
-            if (e.done || e.cycle) { depthMemo[id] = 0; return 0; }
-            if (!e.children.length && !e.options) { depthMemo[id] = 1; return 1; }
-            var d = 0;
-            var kids = (e.children.length ? e.children : (e.options || []));
-            for (var i = 0; i < kids.length; i++) {
-                var dk = depthOf(kids[i]);
-                if (dk > d) d = dk;
-            }
-            depthMemo[id] = d + 1;
-            return d + 1;
-        }
         var ids = Object.keys(entries);
         for (var i = 0; i < ids.length; i++) {
             var e = entries[ids[i]];
             if (e.state !== "locked-prereq" && !e.capLimited && !e.prodLimited) continue;
             var kids = (e.andReqs || []).slice();
             if (e.options && e.options.length) {
-                var best = null, bestN = Infinity, bestD = Infinity;
+                var best = null, bestN = Infinity;
                 for (var j = 0; j < e.options.length; j++) {
-                    var n = _leafCount(entries, e.options[j], leafMemo);
-                    var d = depthOf(e.options[j]);
-                    if (n < bestN || (n === bestN && d < bestD)) {
-                        bestN = n; bestD = d; best = e.options[j];
-                    }
+                    var oid = e.options[j];
+                    var n = _leafCount(entries, oid, leafMemo);
+                    if (n < bestN) { bestN = n; best = oid; }
                 }
                 e.picked = best;
                 if (best) kids.push(best);
@@ -2639,6 +2978,7 @@
     function annotateChainETA(game, scrape, chain) {
         if (!chain) return chain;
         var idx = _indexCraftsByOutput(scrape, game);
+        chain.__craftsByOutput = idx;  // reused by beam search without re-indexing
         for (var i = 0; i < chain.frontier.length; i++) {
             var e = chain.entries[chain.frontier[i]];
             var eta = timeToAfford(game, e.cost || [], idx);
@@ -2821,6 +3161,32 @@
         return null;
     }
 
+    // When the recommended producer is a `job` node but no free kittens exist,
+    // we need more population first.  Scan bld for unlocked housing (buildings
+    // with `maxKittens` effect); return the earliest-listed not-done one
+    // (typically hut → logHouse → mansion).  Returns chain-node id or null.
+    function _findHousingProducer(game, eg) {
+        // Try all bld nodes in eg; pick first unlocked one whose game meta
+        // has maxKittens > 0.  Order: hut, logHouse, mansion.
+        var preferred = ["hut", "logHouse", "mansion"];
+        for (var i = 0; i < preferred.length; i++) {
+            var nm = preferred[i];
+            var nid = "bld:" + nm;
+            var nn = eg.nodes[nid];
+            if (!nn || nn.state === "done" || nn.state === "missing") continue;
+            var b = game.bld && game.bld.get && game.bld.get(nm);
+            if (!b || !b.unlocked) continue;
+            var eff = b.effects;
+            if (b.stages && b.stages.length > 0) {
+                var st = b.stages[b.stage || 0];
+                if (st && st.effects) eff = st.effects;
+            }
+            if (!eff || !(eff.maxKittens > 0)) continue;
+            return nid;
+        }
+        return null;
+    }
+
     // Pick the best producer of `res` from a list of producer node ids.
     // Preference: smallest chain leaf-count (cheapest), tie-break by ETA, then
     // by whether it's already ready.  Returns node id or null.
@@ -2868,12 +3234,212 @@
     //   { kind: "done",     goalId, node, chain }    — goal is already "done"
     //   { kind: "blocked",  goalId, chain, reason }  — frontier empty or all ∞
     //   { kind: "recommend", goalId, node, entry, chain, action, etaSecs }
-    function planNextAction(game) {
+    // ── Goal-aware candidate expansion ────────────────────────────────────────
+    // chain.frontier collapses to ~1 item in most Kittens states because OR
+    // alternatives pick a single rail. To give beam real work, we expand the
+    // candidate set to actionable nodes that *affect* a resource the goal
+    // actually needs — producers, cap-raisers, ratio-boosters.
+
+    function _collectGoalResources(chain) {
+        var needed = {};
+        if (!chain || !chain.entries) return needed;
+        for (var id in chain.entries) {
+            var e = chain.entries[id];
+            if (!e.cost) continue;
+            for (var i = 0; i < e.cost.length; i++) needed[e.cost[i].name] = true;
+        }
+        return needed;
+    }
+
+    function _isActionableState(s) {
+        return s === 'ready' || s === 'locked-cost' || s === 'locked-ui';
+    }
+    function _isExecutableKind(k) {
+        return k === 'bld' || k === 'tech' || k === 'ws_upg' ||
+               k === 'rel_upg_ru' || k === 'rel_upg_zu' || k === 'rel_upg_tu' ||
+               k === 'mission' || k === 'space_bld' || k === 'embassy';
+    }
+
+    // Returns { relevant: bool, reason: 'producer'|'capRaiser'|'ratioBooster'|null }.
+    // Minimum-magnitude filter drops tiny ratio boosts (<3%) that waste beam slots.
+    var MIN_RATIO_MAGNITUDE = 0.03;
+    function _nodeGoalRelevance(node, needed, state) {
+        var p = node.perUnitProvides;
+        if (!p) return { relevant: false };
+        var r;
+        for (var i = 0; i < p.resources.length; i++) {
+            r = p.resources[i];
+            if (needed[r.res] && r.rate > 0) return { relevant: true, reason: 'producer' };
+        }
+        for (var i = 0; i < p.storage.length; i++) {
+            r = p.storage[i];
+            if (needed[r.res] && r.amount > 0) return { relevant: true, reason: 'capRaiser' };
+        }
+        for (var i = 0; i < p.ratios.length; i++) {
+            r = p.ratios[i];
+            // Ratio boosters only help if there's a non-zero rate to multiply.
+            // Without this check, a 10% bonus on 0 science still registers
+            // as "goal-relevant" and the beam spams libraries in winter when
+            // scholars are all reassigned to farming.
+            var liveRate = state ? (state.rates[r.res] || 0) : 1;
+            if (r.kind === 'ratio' && needed[r.res] &&
+                r.amount > MIN_RATIO_MAGNITUDE &&
+                liveRate > 0) {
+                return { relevant: true, reason: 'ratioBooster' };
+            }
+        }
+        return { relevant: false };
+    }
+
+    function collectGoalAwareCandidates(eg, chain, state) {
+        var needed = _collectGoalResources(chain);
+        var candidates = {};
+
+        // R1 — chain frontier gets priority 0.
+        if (chain && chain.frontier) {
+            for (var i = 0; i < chain.frontier.length; i++) {
+                candidates[chain.frontier[i]] = { priority: 0, reason: 'chain' };
+            }
+        }
+
+        // R2-R4 — scan edge graph.
+        for (var id in eg.nodes) {
+            if (candidates[id]) continue;
+            var n = eg.nodes[id];
+            if (!_isActionableState(n.state) || !_isExecutableKind(n.kind)) continue;
+            var rel = _nodeGoalRelevance(n, needed, state);
+            if (!rel.relevant) continue;
+            var pri = rel.reason === 'producer'   ? 1 :
+                      rel.reason === 'capRaiser'  ? 2 : 3;
+            candidates[id] = { priority: pri, reason: rel.reason };
+        }
+        return candidates;
+    }
+
+    // Prune to top-K actionable now. Chain-priority survives regardless of ETA
+    // so the user's goal always gets a seat at the table.
+    function pruneCandidates(eg, state, craftsByOutput, candidates, maxK) {
+        var scored = [];
+        for (var id in candidates) {
+            var n = eg.nodes[id];
+            if (!n) continue;
+            var price = (n.state === 'locked-ui') ? n.unlockPrice : n.price;
+            var eta = timeToAffordInState(state, price || [], craftsByOutput);
+            if (eta.secs === Infinity) continue;
+            scored.push({ id: id, eta: eta.secs, priority: candidates[id].priority,
+                          reason: candidates[id].reason });
+        }
+        scored.sort(function (a, b) {
+            if (a.priority !== b.priority) return a.priority - b.priority;
+            return a.eta - b.eta;
+        });
+        return scored.slice(0, maxK);
+    }
+
+    // ── Beam search over frontier ordering ───────────────────────────────────
+    // Evaluates sequences of frontier actions using closed-form algebraic
+    // simulation (see 04c_symbolic.js). Picks the ordering with minimum total
+    // elapsed time.  Falls back to chain.recommended if budget exhausted.
+    function beamSearchFrontier(game, eg, frontier, craftsByOutput, opts) {
+        if (!frontier || frontier.length === 0) return null;
+        if (frontier.length === 1) return frontier[0];
+
+        var startMs   = Date.now();
+        var maxDepth  = (opts && opts.maxDepth)  || 3;
+        var beamWidth = (opts && opts.beamWidth) || 4;
+        var budgetMs  = (opts && opts.budgetMs)  || 400;
+
+        var baseState = snapshotAlgebraicState(game, eg);
+
+        // Seed: each frontier item is a 1-step candidate.
+        var beam = [];
+        for (var i = 0; i < frontier.length; i++) {
+            var nodeId = frontier[i];
+            var node   = eg.nodes[nodeId];
+            if (!node) continue;
+            var price  = (node.state === 'locked-ui') ? node.unlockPrice : node.price;
+            var eta    = timeToAffordInState(baseState, price || [], craftsByOutput);
+            if (eta.secs === Infinity) continue;
+            beam.push({ firstAction: nodeId, path: [nodeId], state: baseState, totalEta: eta.secs });
+        }
+        _beamSort(beam);
+        beam = beam.slice(0, beamWidth);
+
+        for (var depth = 1; depth < maxDepth; depth++) {
+            if (Date.now() - startMs > budgetMs || beam.length === 0) break;
+            var nextBeam = [];
+            for (var bi = 0; bi < beam.length; bi++) {
+                if (Date.now() - startMs > budgetMs) break;
+                var cand     = beam[bi];
+                var lastId   = cand.path[cand.path.length - 1];
+                var lastNode = eg.nodes[lastId];
+                if (!lastNode) { nextBeam.push(cand); continue; }
+
+                var nextState = applyActionSymbolic(cand.state, lastNode, craftsByOutput);
+                if (!nextState) { nextBeam.push(cand); continue; }
+
+                var remaining = _beamRemaining(cand.path, frontier, lastNode, eg);
+                if (remaining.length === 0) { nextBeam.push(cand); continue; }
+
+                for (var ri = 0; ri < remaining.length; ri++) {
+                    var nextId   = remaining[ri];
+                    var nextNode = eg.nodes[nextId];
+                    if (!nextNode) continue;
+                    var nextPrice = (nextNode.state === 'locked-ui') ? nextNode.unlockPrice : nextNode.price;
+                    var nextEta   = timeToAffordInState(nextState, nextPrice || [], craftsByOutput);
+                    if (nextEta.secs === Infinity) continue;
+                    nextBeam.push({
+                        firstAction: cand.firstAction,
+                        path:        cand.path.concat([nextId]),
+                        state:       nextState,
+                        totalEta:    cand.totalEta + nextEta.secs
+                    });
+                }
+            }
+            _beamSort(nextBeam);
+            beam = nextBeam.slice(0, beamWidth);
+        }
+
+        var elapsedMs = Date.now() - startMs;
+        var best = beam.length > 0 ? beam[0] : null;
+        if (typeof console !== "undefined" && console.log) {
+            console.log('[Beam] depth=' + maxDepth + ' width=' + beamWidth +
+                ' took=' + elapsedMs + 'ms best=' +
+                (best ? best.firstAction + ' totalEta=' + best.totalEta.toFixed(0) + 's' : 'none'));
+        }
+        return best ? best.firstAction : null;
+    }
+
+    function _beamSort(beam) {
+        beam.sort(function (a, b) { return a.totalEta - b.totalEta; });
+    }
+
+    // Remaining candidates: original set minus those already in path.
+    // NOTE: we deliberately do NOT fold in appliedNode.provides.unlocks —
+    // doing so asymmetrically deepens branches whose last action unlocks
+    // new nodes, inflating their totalEta vs. branches that exhaust earlier.
+    // Apples-to-apples requires a fixed candidate pool across all paths.
+    function _beamRemaining(path, frontier, appliedNode, eg) {
+        var out = [];
+        for (var i = 0; i < frontier.length; i++) {
+            if (path.indexOf(frontier[i]) < 0) out.push(frontier[i]);
+        }
+        return out;
+    }
+
+    function planNextAction(game, eg) {
         var goalId = (typeof getTerminalGoal === "function") ? getTerminalGoal() : null;
         if (!goalId) return { kind: "no-goal" };
 
-        var scrape = scrapeGraph(game);
-        var eg = buildEdgeGraph(game, scrape);
+        var scrape;
+        if (!eg) {
+            scrape = scrapeGraph(game);
+            eg = buildEdgeGraph(game, scrape);
+            eg.__scrape = scrape;
+        } else {
+            scrape = eg.__scrape || scrapeGraph(game);
+        }
+
         var node = eg.nodes[goalId];
         if (!node) return { kind: "unknown-goal", goalId: goalId };
 
@@ -2885,13 +3451,75 @@
         if (!chain || !chain.recommended) {
             return { kind: "blocked", goalId: goalId, chain: chain, reason: "no frontier" };
         }
-        var entry = chain.entries[chain.recommended];
-        var recNode = eg.nodes[chain.recommended];
+
+        // Beam candidate set: 'frontier' (chain-only) or 'goalAware' (B2 — wider).
+        var recommendedId = chain.recommended;
+        var beamUsed = false;
+        var beamEnabled = (typeof cfg !== 'undefined') ? (cfg.beamEnabled !== false) : true;
+        var candidateMode = (cfg && cfg.beamCandidateMode) || 'goalAware';
+
+        if (beamEnabled) {
+            var candidateIds;
+            if (candidateMode === 'goalAware') {
+                var baseState = snapshotAlgebraicState(game, eg);
+                var cand = collectGoalAwareCandidates(eg, chain, baseState);
+                var maxK = (cfg && cfg.beamMaxCandidates) || 10;
+                var pruned = pruneCandidates(eg, baseState, chain.__craftsByOutput || {}, cand, maxK);
+                candidateIds = pruned.map(function (s) { return s.id; });
+            } else {
+                candidateIds = chain.frontier;
+            }
+
+            if (candidateIds.length > 1) {
+                var beamOpts = {
+                    maxDepth:  (cfg && cfg.beamDepth)    || 3,
+                    beamWidth: (cfg && cfg.beamWidth)    || 4,
+                    budgetMs:  (cfg && cfg.beamBudgetMs) || 400
+                };
+                var beamId = beamSearchFrontier(game, eg, candidateIds, chain.__craftsByOutput || {}, beamOpts);
+                if (beamId) { recommendedId = beamId; beamUsed = true; }
+            }
+        }
+
+        var entry   = chain.entries[recommendedId];
+        var recNode = eg.nodes[recommendedId];
+        // Beam may pick a candidate outside chain.entries (e.g. a capRaiser
+        // surfaced by goalAware expansion). Synthesize an entry so downstream
+        // consumers (orchestrator, UI) have the standard { cost, etaSecs } shape.
+        if (!entry && recNode) {
+            var synthCost = (recNode.state === 'locked-ui') ? recNode.unlockPrice : recNode.price;
+            var etaR = timeToAfford(game, synthCost || [], chain.__craftsByOutput || {});
+            entry = {
+                id: recommendedId, state: recNode.state, children: [],
+                cost: synthCost || [], etaSecs: etaR.secs, capLimited: etaR.capLimited
+            };
+            chain.entries[recommendedId] = entry;
+        }
+        var safetyNote = null;
+
+        // Job-producer redirect: `job:X` is user-only (nothing to build), but
+        // producing anything via a job requires a free kitten.  If none exist,
+        // route to a housing building so population grows first.
+        if (recNode && recNode.kind === "job") {
+            var free = (game.village && game.village.getFreeKittens)
+                ? game.village.getFreeKittens() : 0;
+            if (free <= 0) {
+                var houseId = _findHousingProducer(game, eg);
+                if (houseId) {
+                    chain = chainBackward(eg, houseId);
+                    annotateChainETA(game, scrape, chain);
+                    if (chain.recommended) {
+                        entry = chain.entries[chain.recommended];
+                        recNode = eg.nodes[chain.recommended];
+                        safetyNote = "population: routing via " + houseId;
+                    }
+                }
+            }
+        }
 
         // Runway safety: if the recommended build is unsafe, swap to a
         // producer of the threatened resource.  One redirect step only.
         var unsafe = _runwayCheck(game, recNode);
-        var safetyNote = null;
         if (unsafe) {
             var producerIds = (eg.producersOf && eg.producersOf[unsafe.res]) || [];
             var swapId = _pickBestProducer(game, scrape, eg, producerIds);
@@ -2918,27 +3546,70 @@
         if (!action) {
             return {
                 kind: "blocked", goalId: goalId, chain: chain,
-                reason: "frontier is user-only (" + (recNode ? recNode.kind : "?") + " " + chain.recommended + ")"
+                reason: "frontier is user-only (" + (recNode ? recNode.kind : "?") + " " + recommendedId + ")"
             };
         }
         return {
             kind: "recommend", goalId: goalId,
             node: recNode, entry: entry, chain: chain,
             action: action, etaSecs: entry ? entry.etaSecs : Infinity,
-            safetyNote: safetyNote
+            safetyNote: safetyNote, beamUsed: beamUsed
         };
     }
 
     if (typeof window !== "undefined") {
         window.__chainBackward = function () {
             var goalId = getTerminalGoal(); if (!goalId) return null;
-            var scrape = scrapeGraph(gamePage);
-            var eg = buildEdgeGraph(gamePage, scrape);
+            var eg = (typeof getCachedEdgeGraph === 'function')
+                ? getCachedEdgeGraph(gamePage)
+                : buildEdgeGraph(gamePage, scrapeGraph(gamePage));
             var chain = chainBackward(eg, goalId);
-            annotateChainETA(gamePage, scrape, chain);
+            annotateChainETA(gamePage, eg.__scrape || scrapeGraph(gamePage), chain);
             return chain;
         };
+        window.__beamSearch = function () {
+            var eg = (typeof getCachedEdgeGraph === 'function')
+                ? getCachedEdgeGraph(gamePage)
+                : null;
+            return planNextAction(gamePage, eg);
+        };
+        window.__beamDebug = function () {
+            var savedD = cfg.beamDepth, savedW = cfg.beamWidth, savedB = cfg.beamBudgetMs;
+            cfg.beamDepth = 4; cfg.beamWidth = 8; cfg.beamBudgetMs = 3000;
+            var result = window.__beamSearch();
+            cfg.beamDepth = savedD; cfg.beamWidth = savedW; cfg.beamBudgetMs = savedB;
+            console.log('[beamDebug]', result);
+            return result;
+        };
         window.__dumpChain = dumpChain;
+        window.__dumpCandidates = function () {
+            var goalId = getTerminalGoal();
+            if (!goalId) { console.warn('[candidates] no terminal goal set'); return; }
+            var eg = (typeof getCachedEdgeGraph === 'function')
+                ? getCachedEdgeGraph(gamePage)
+                : buildEdgeGraph(gamePage, scrapeGraph(gamePage));
+            var scrape = eg.__scrape || scrapeGraph(gamePage);
+            var chain = chainBackward(eg, goalId);
+            annotateChainETA(gamePage, scrape, chain);
+            var baseState = snapshotAlgebraicState(gamePage, eg);
+            var cand = collectGoalAwareCandidates(eg, chain, baseState);
+            var maxK = (cfg && cfg.beamMaxCandidates) || 10;
+            var pruned = pruneCandidates(eg, baseState, chain.__craftsByOutput || {}, cand, maxK);
+            var rows = pruned.map(function (s) {
+                var n = eg.nodes[s.id];
+                return {
+                    id:       s.id,
+                    kind:     n.kind,
+                    state:    n.state,
+                    reason:   s.reason,
+                    priority: s.priority,
+                    etaSecs:  Number(s.eta.toFixed(1))
+                };
+            });
+            console.log('[candidates] goal=' + goalId + '  total=' + Object.keys(cand).length + '  pruned=' + rows.length);
+            console.table(rows);
+            return rows;
+        };
     }
 
     // =========================================================================
@@ -3441,6 +4112,10 @@
         // new season (winter's -catnip swing is huge).  Wait 5s, then mark
         // for recalc on the next cycle.
         var currentSeason = gamePage.calendar ? gamePage.calendar.season : -1;
+        // Spring (season 0) entry from winter (season 3): immediate reset.
+        // Winter's scarcity skew makes the in-place nudge logic slow to
+        // reconverge on the optimal spring distribution.
+        var springWakeup = (_lastSeasonForJobs === 3 && currentSeason === 0);
         if (_lastSeasonForJobs !== -1 && _lastSeasonForJobs !== currentSeason) {
             _seasonChangeTimeForJobs = Date.now();
             _seasonRecalculated = false;
@@ -3451,6 +4126,14 @@
             (Date.now() - _seasonChangeTimeForJobs > _effectiveCooldown(5000))) {
             delayedSeasonChange = true;
             _seasonRecalculated = true;
+        }
+        if (springWakeup) {
+            delayedSeasonChange = true;
+            _seasonRecalculated = true;
+            // Wipe winter's biases so the recompute starts fresh.
+            _catnipRateEMA = null;
+            _lastFarmerAddTime = 0;
+            _cappedJobs = {};
         }
 
         updateCatnipEMA();
@@ -3474,7 +4157,9 @@
             _lastFarmerAddTime = 0;
             // Recompute with pre-clear farmer count so the EMA logic doesn't
             // see "0 farmers → crisis" right after the wipe.
-            result = computeJobTargets(available, total, preClearFarmers);
+            // Exception: spring wakeup — force a full recompute from zero so
+            // winter's farmer pile doesn't re-seed the new distribution.
+            result = computeJobTargets(available, total, springWakeup ? 0 : preClearFarmers);
             targets = result.targets;
         }
 
@@ -3506,6 +4191,22 @@
             try { gamePage.village.assignJob(job, count); }
             catch (e) { job.value = (job.value || 0) + count; }
         }
+
+        // Reconcile: whatever leftover kittens the assign loop couldn't place
+        // (target referenced an unavailable job, assignJob short-assigned, etc.)
+        // get dumped into a real job so nobody sits idle.
+        try {
+            var free = gamePage.village.getFreeKittens ? gamePage.village.getFreeKittens() : 0;
+            if (free > 0) {
+                var fallback = available.find(function (j) { return j.name === "farmer"; })
+                    || available.find(function (j) { return j.name === "woodcutter"; })
+                    || available[0];
+                if (fallback) {
+                    try { gamePage.village.assignJob(fallback, free); }
+                    catch (e) { fallback.value = (fallback.value || 0) + free; }
+                }
+            }
+        } catch (e) { }
     }
 
     // =========================================================================
@@ -3563,7 +4264,14 @@
 
         _cycleCtx = createResolveContext(gamePage);
         var ctx = _cycleCtx;
-        var plan = planNextAction(gamePage);
+
+        var cycleStartMs = Date.now();
+        var eg = (typeof getCachedEdgeGraph === 'function')
+            ? getCachedEdgeGraph(gamePage) : null;
+        var plan = planNextAction(gamePage, eg);
+        var cycleMs = Date.now() - cycleStartMs;
+        plan.__cycleMs = cycleMs;
+        if (cycleMs > 500) console.log('[Cycle] planNextAction took ' + cycleMs + 'ms');
         lastPlan = plan;
 
         if (plan.kind === "no-goal") {

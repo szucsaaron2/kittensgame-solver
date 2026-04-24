@@ -53,7 +53,14 @@
 
         _cycleCtx = createResolveContext(gamePage);
         var ctx = _cycleCtx;
-        var plan = planNextAction(gamePage);
+
+        var cycleStartMs = Date.now();
+        var eg = (typeof getCachedEdgeGraph === 'function')
+            ? getCachedEdgeGraph(gamePage) : null;
+        var plan = planNextAction(gamePage, eg);
+        var cycleMs = Date.now() - cycleStartMs;
+        plan.__cycleMs = cycleMs;
+        if (cycleMs > 500) console.log('[Cycle] planNextAction took ' + cycleMs + 'ms');
         lastPlan = plan;
 
         if (plan.kind === "no-goal") {

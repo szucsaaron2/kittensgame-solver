@@ -431,6 +431,10 @@
                 return { res: k.slice(0, -suf.length), kind: "prod" };
             }
         }
+        // Kitten cap is keyed "maxKittens" (prefix, not suffix) — special-case it.
+        if (k === "maxKittens") {
+            return { res: "maxKittens", kind: "storage" };
+        }
         if (k.length > 3 && k.slice(-3) === "Max") {
             return { res: k.slice(0, -3), kind: "storage" };
         }

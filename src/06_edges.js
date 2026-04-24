@@ -140,7 +140,8 @@
     // ── node constructors ────────────────────────────────────────────────
     function _bldNode(game, b) {
         var done = false;
-        var prov = _provideEntries(b.effects, b.val || 0);
+        var prov     = _provideEntries(b.effects, b.val || 0);
+        var provUnit = _provideEntries(b.effects, 1);
         // For buildings, "done" is ambiguous (can always build more).  Mark
         // done only if the building is single-purpose (no price-ratio scaling
         // and already present).  Otherwise leave as incremental — planner
@@ -154,11 +155,16 @@
             val: b.val, on: b.on,
             prereqs: [],           // filled in after inverse-unlock pass
             price: b.prices,
+            priceRatio: b.priceRatio || 1.15,  // used by beam repeat-cost scaling
             unlockPrice: _unlockPriceFromScraped(b),
             provides: {
                 resources: prov.resources, storage: prov.storage,
                 ratios: prov.ratios, con: prov.con,
                 unlocks: [] // filled after
+            },
+            perUnitProvides: {
+                resources: provUnit.resources, storage: provUnit.storage,
+                ratios: provUnit.ratios, con: provUnit.con
             },
             rawUnlocks: b.unlocks
         };
@@ -211,6 +217,17 @@
     }
 
     function _jobNode(j) {
+        // jobModifiers is per-kitten-per-tick.  Symbolic state multiplies by
+        // (assigned count × tps) when a job action is applied.  We deliberately
+        // leave provides.resources EMPTY so the flat-add path in
+        // applyActionSymbolic doesn't count a job reassignment as one-kitten
+        // worth of rate.
+        var mods = {};
+        if (j.modifiers) {
+            for (var k in j.modifiers) {
+                if (j.modifiers.hasOwnProperty(k) && j.modifiers[k]) mods[k] = j.modifiers[k];
+            }
+        }
         return {
             id: _id("job", j.name),
             kind: "job",
@@ -218,21 +235,13 @@
             state: j.unlocked ? "ready" : "locked-prereq",
             prereqs: [],
             price: null, unlockPrice: null,
+            jobModifiers: mods,
             provides: {
-                resources: _modsToProvides(j.modifiers),
+                resources: [],
                 storage: [], ratios: [], con: [], unlocks: []
             },
             rawUnlocks: null
         };
-    }
-    function _modsToProvides(mods) {
-        var out = [];
-        for (var k in mods) {
-            if (!mods.hasOwnProperty(k)) continue;
-            if (!mods[k]) continue;
-            out.push({ res: k, rate: mods[k], key: "jobMod" });
-        }
-        return out;
     }
 
     function _craftNode(c) {
@@ -267,7 +276,8 @@
     }
 
     function _spaceBldNode(game, b) {
-        var prov = _provideEntries(b.effects, b.val || 0);
+        var prov     = _provideEntries(b.effects, b.val || 0);
+        var provUnit = _provideEntries(b.effects, 1);
         var canAfford = _canAfford(game, b.prices);
         return {
             id: _id("space_bld", b.name),
@@ -277,12 +287,17 @@
             val: b.val, on: b.on,
             prereqs: [],
             price: b.prices,
+            priceRatio: b.priceRatio || 1.15,  // used by beam repeat-cost scaling
             unlockPrice: b.prices && b.prices.map(function (p) {
                 return { name: p.name, val: p.val * UI_UNLOCK_THRESHOLD };
             }),
             provides: {
                 resources: prov.resources, storage: prov.storage,
                 ratios: prov.ratios, con: prov.con, unlocks: []
+            },
+            perUnitProvides: {
+                resources: provUnit.resources, storage: provUnit.storage,
+                ratios: provUnit.ratios, con: provUnit.con
             },
             rawUnlocks: b.unlocks
         };
@@ -347,6 +362,17 @@
 
         function add(n) {
             if (!n) return;
+            // Ensure every node has a perUnitProvides field so applyActionSymbolic
+            // can read it without null-checks per kind. For non-scaling kinds the
+            // marginal effect of "acquiring one" equals provides directly.
+            if (!n.perUnitProvides) {
+                n.perUnitProvides = {
+                    resources: n.provides.resources,
+                    storage:   n.provides.storage,
+                    ratios:    n.provides.ratios,
+                    con:       n.provides.con
+                };
+            }
             nodes[n.id] = n;
             for (var i = 0; i < n.provides.resources.length; i++) {
                 var r = n.provides.resources[i].res;
@@ -541,8 +567,42 @@
         return eg.nodes[id] || null;
     }
 
+    // ── Edge graph cache ─────────────────────────────────────────────────────
+    // Rebuilds are expensive (scrape + link-build over 300+ nodes each cycle).
+    // We cache and only rebuild when game state mutates (action executed) or
+    // EG_FORCE_INTERVAL cycles elapse as a safety net against stale nodes.
+    var _egCache              = null;
+    var _egDirty              = true;
+    var _egCyclesSinceRebuild = 0;
+    var EG_FORCE_INTERVAL     = 10;
+
+    function markEdgeGraphDirty() {
+        _egDirty = true;
+    }
+
+    function getCachedEdgeGraph(game) {
+        _egCyclesSinceRebuild++;
+        var forceRebuild = (_egCyclesSinceRebuild >= EG_FORCE_INTERVAL);
+        if (_egDirty || !_egCache || forceRebuild) {
+            var scrape = scrapeGraph(game);
+            _egCache = buildEdgeGraph(game, scrape);
+            _egCache.__scrape = scrape;
+            _egDirty = false;
+            _egCyclesSinceRebuild = 0;
+        }
+        return _egCache;
+    }
+
     if (typeof window !== "undefined") {
         window.__buildEdgeGraph = function () { return buildEdgeGraph(gamePage, scrapeGraph(gamePage)); };
         window.__dumpEdgeGraph  = dumpEdgeGraph;
         window.__listNodeIds    = function () { return listAllNodeIds(window.__buildEdgeGraph()); };
+        window.__egCacheInfo    = function () {
+            return {
+                dirty:     _egDirty,
+                cycles:    _egCyclesSinceRebuild,
+                cached:    !!_egCache,
+                nodeCount: _egCache ? Object.keys(_egCache.nodes).length : 0
+            };
+        };
     }

@@ -87,6 +87,38 @@
         return e;
     }
 
+    // Effective fanout = count of this node's unlock targets that aren't
+    // already satisfied.  Done targets add no planning value.
+    function _effectiveFanout(eg, id) {
+        if (!eg || !eg.nodes) return 0;
+        var n = eg.nodes[id];
+        if (!n || !n.provides || !n.provides.unlocks) return 0;
+        var unlocks = n.provides.unlocks;
+        var c = 0;
+        for (var i = 0; i < unlocks.length; i++) {
+            var t = eg.nodes[unlocks[i]];
+            if (t && t.state !== "done") c++;
+        }
+        return c;
+    }
+
+    // Discount a leaf-count by the option's fanout so gateways outrank leaves.
+    // Floor prevents a single gateway from becoming indistinguishably free,
+    // but must be small enough that deep chains don't saturate — at depth N
+    // with fanout f each, compounded discount is (1+f)^-N, which for f=5 N=7
+    // is ~1e-5.  Floor at 1e-8 lets ~12 fanout-5 levels stay distinguishable.
+    // Infinity (cycle / dead-end) passes through untouched.
+    function _fanoutScore(n, eg, id) {
+        if (n === Infinity) return Infinity;
+        var w = (typeof cfg !== "undefined" && typeof cfg.fanoutWeight === "number")
+                ? cfg.fanoutWeight : 1.0;
+        if (!w) return n;
+        var f = _effectiveFanout(eg, id);
+        if (!f) return n;
+        var discounted = n / (1 + w * f);
+        return discounted < 1e-8 ? 1e-8 : discounted;
+    }
+
     // Count actionable leaves reachable from an entry.  Walks raw
     // options/andReqs (set in first pass) rather than e.children (which is
     // still being populated during the picker loop).  Uses an in-progress
@@ -96,7 +128,10 @@
     // raises science cap, observatory needs astronomy, astronomy needs
     // theology).  Also returns Inf for dead-end locked-prereq nodes whose
     // unlocker edges aren't modeled in the graph (race/mission gates).
-    function _leafCount(entries, id, memo) {
+    //
+    // `eg` is the edge graph; used only for fanout-weighted OR selection
+    // (see _fanoutScore).  Passing null recovers the legacy behavior.
+    function _leafCount(entries, id, memo, eg) {
         if (memo[id] !== undefined) return memo[id];
         memo[id] = Infinity; // in-progress sentinel → cycle ⇒ Infinity
         var e = entries[id];
@@ -108,9 +143,16 @@
         var hasCapOrProd = (e.capLimited || e.prodLimited) && e.options && e.options.length;
         if (hasCapOrProd) {
             // Cap/prod-limited actionable leaf: MIN over synthesized helpers.
+            // Fanout discount applies only when there's genuine choice
+            // (≥2 helpers).  A forced single helper is effectively AND —
+            // discounting it would distort propagated leaf counts for no
+            // selection benefit.
             n = Infinity;
+            var multi = e.options.length >= 2;
             for (var i = 0; i < e.options.length; i++) {
-                var c = _leafCount(entries, e.options[i], memo);
+                var oid = e.options[i];
+                var raw = _leafCount(entries, oid, memo, eg);
+                var c = multi ? _fanoutScore(raw, eg, oid) : raw;
                 if (c < n) n = c;
             }
         } else if (e.state === "ready" || e.state === "locked-cost" || e.state === "locked-ui") {
@@ -125,15 +167,18 @@
                 n = 0;
                 if (hasAnd) {
                     for (var i = 0; i < e.andReqs.length; i++) {
-                        var c = _leafCount(entries, e.andReqs[i], memo);
+                        var c = _leafCount(entries, e.andReqs[i], memo, eg);
                         if (c === Infinity) { n = Infinity; break; }
                         n += c;
                     }
                 }
                 if (n !== Infinity && hasOr) {
                     var best = Infinity;
+                    var multiOr = e.options.length >= 2;
                     for (var j = 0; j < e.options.length; j++) {
-                        var c = _leafCount(entries, e.options[j], memo);
+                        var oid = e.options[j];
+                        var raw = _leafCount(entries, oid, memo, eg);
+                        var c = multiOr ? _fanoutScore(raw, eg, oid) : raw;
                         if (c < best) best = c;
                     }
                     if (best === Infinity) n = Infinity;
@@ -251,9 +296,11 @@
             var kids = (e.andReqs || []).slice();
             if (e.options && e.options.length) {
                 var best = null, bestN = Infinity;
+                var multiPick = e.options.length >= 2;
                 for (var j = 0; j < e.options.length; j++) {
                     var oid = e.options[j];
-                    var n = _leafCount(entries, oid, leafMemo);
+                    var raw = _leafCount(entries, oid, leafMemo, eg);
+                    var n = multiPick ? _fanoutScore(raw, eg, oid) : raw;
                     if (n < bestN) { bestN = n; best = oid; }
                 }
                 e.picked = best;
@@ -383,6 +430,7 @@
     function annotateChainETA(game, scrape, chain) {
         if (!chain) return chain;
         var idx = _indexCraftsByOutput(scrape, game);
+        chain.__craftsByOutput = idx;  // reused by beam search without re-indexing
         for (var i = 0; i < chain.frontier.length; i++) {
             var e = chain.entries[chain.frontier[i]];
             var eta = timeToAfford(game, e.cost || [], idx);
@@ -638,12 +686,342 @@
     //   { kind: "done",     goalId, node, chain }    — goal is already "done"
     //   { kind: "blocked",  goalId, chain, reason }  — frontier empty or all ∞
     //   { kind: "recommend", goalId, node, entry, chain, action, etaSecs }
-    function planNextAction(game) {
+    // ── Goal-aware candidate expansion ────────────────────────────────────────
+    // chain.frontier collapses to ~1 item in most Kittens states because OR
+    // alternatives pick a single rail. To give beam real work, we expand the
+    // candidate set to actionable nodes that *affect* a resource the goal
+    // actually needs — producers, cap-raisers, ratio-boosters.
+
+    function _collectGoalResources(chain) {
+        var needed = {};
+        if (!chain || !chain.entries) return needed;
+        for (var id in chain.entries) {
+            var e = chain.entries[id];
+            if (!e.cost) continue;
+            for (var i = 0; i < e.cost.length; i++) needed[e.cost[i].name] = true;
+        }
+        return needed;
+    }
+
+    function _isActionableState(s) {
+        return s === 'ready' || s === 'locked-cost' || s === 'locked-ui';
+    }
+    function _isExecutableKind(k) {
+        return k === 'bld' || k === 'tech' || k === 'ws_upg' ||
+               k === 'rel_upg_ru' || k === 'rel_upg_zu' || k === 'rel_upg_tu' ||
+               k === 'mission' || k === 'space_bld' || k === 'embassy';
+    }
+
+    // Returns { relevant: bool, reason: 'producer'|'capRaiser'|'ratioBooster'
+    //          |'populationCap'|'populationFuel'|null }.
+    // Minimum-magnitude filter drops tiny ratio boosts (<3%) that waste beam slots.
+    var MIN_RATIO_MAGNITUDE = 0.03;
+    function _nodeGoalRelevance(node, needed, state) {
+        var p = node.perUnitProvides;
+        if (!p) return { relevant: false };
+        var r;
+        for (var i = 0; i < p.resources.length; i++) {
+            r = p.resources[i];
+            if (needed[r.res] && r.rate > 0) return { relevant: true, reason: 'producer' };
+        }
+        for (var i = 0; i < p.storage.length; i++) {
+            r = p.storage[i];
+            if (needed[r.res] && r.amount > 0) return { relevant: true, reason: 'capRaiser' };
+        }
+        for (var i = 0; i < p.ratios.length; i++) {
+            r = p.ratios[i];
+            // Ratio boosters only help if there's a non-zero rate to multiply.
+            // Without this check, a 10% bonus on 0 science still registers
+            // as "goal-relevant" and the beam spams libraries in winter when
+            // scholars are all reassigned to farming.
+            var liveRate = state ? (state.rates[r.res] || 0) : 1;
+            if (r.kind === 'ratio' && needed[r.res] &&
+                r.amount > MIN_RATIO_MAGNITUDE &&
+                liveRate > 0) {
+                return { relevant: true, reason: 'ratioBooster' };
+            }
+        }
+
+        // Transitive relevance through the kitten model: if any needed resource
+        // has a per-kitten job modifier, then huts (maxKittens) and catnip
+        // producers (fields/pastures) matter — they unblock population growth,
+        // which the beam's time advance turns into more workers, which turns
+        // into more of the needed resource.
+        if (state && state.jobMods) {
+            var kittenEnables = false;
+            for (var res in needed) {
+                if (!needed.hasOwnProperty(res)) continue;
+                for (var jobName in state.jobMods) {
+                    var mod = state.jobMods[jobName][res];
+                    if (mod && mod > 0) { kittenEnables = true; break; }
+                }
+                if (kittenEnables) break;
+            }
+            if (kittenEnables) {
+                for (var i = 0; i < p.storage.length; i++) {
+                    if (p.storage[i].res === 'maxKittens' && p.storage[i].amount > 0) {
+                        return { relevant: true, reason: 'populationCap' };
+                    }
+                }
+                for (var i = 0; i < p.resources.length; i++) {
+                    if (p.resources[i].res === 'catnip' && p.resources[i].rate > 0) {
+                        return { relevant: true, reason: 'populationFuel' };
+                    }
+                }
+            }
+        }
+
+        return { relevant: false };
+    }
+
+    function collectGoalAwareCandidates(eg, chain, state) {
+        var needed = _collectGoalResources(chain);
+        var candidates = {};
+
+        // R1 — chain frontier gets priority 0.
+        if (chain && chain.frontier) {
+            for (var i = 0; i < chain.frontier.length; i++) {
+                candidates[chain.frontier[i]] = { priority: 0, reason: 'chain' };
+            }
+        }
+
+        // R2-R4 — scan edge graph.
+        for (var id in eg.nodes) {
+            if (candidates[id]) continue;
+            var n = eg.nodes[id];
+            if (!_isActionableState(n.state) || !_isExecutableKind(n.kind)) continue;
+            var rel = _nodeGoalRelevance(n, needed, state);
+            if (!rel.relevant) continue;
+            var pri = rel.reason === 'producer'      ? 1 :
+                      rel.reason === 'capRaiser'     ? 2 :
+                      rel.reason === 'populationCap' ? 2 :
+                      rel.reason === 'populationFuel'? 3 : 3;
+            candidates[id] = { priority: pri, reason: rel.reason };
+        }
+        return candidates;
+    }
+
+    // Prune to top-K actionable now. Chain-priority survives regardless of ETA
+    // so the user's goal always gets a seat at the table.
+    function pruneCandidates(eg, state, craftsByOutput, candidates, maxK) {
+        var scored = [];
+        for (var id in candidates) {
+            var n = eg.nodes[id];
+            if (!n) continue;
+            var price = (n.state === 'locked-ui') ? n.unlockPrice : n.price;
+            var eta = timeToAffordInState(state, price || [], craftsByOutput);
+            if (eta.secs === Infinity) continue;
+            scored.push({ id: id, eta: eta.secs, priority: candidates[id].priority,
+                          reason: candidates[id].reason });
+        }
+        scored.sort(function (a, b) {
+            if (a.priority !== b.priority) return a.priority - b.priority;
+            return a.eta - b.eta;
+        });
+        return scored.slice(0, maxK);
+    }
+
+    // ── Beam search with goal-terminal scoring ───────────────────────────────
+    // Objective: minimize wall-clock time to reach the terminal goal.
+    //   score(path) = Σ buildTime(step_i)  +  T_goal(stateAfterPath)
+    // where T_goal(s) = timeToAffordInState(s, goalPrice).  Baseline is
+    // T_goal(baseState) — time to save for the goal with zero instrumentals.
+    // Beam only overrides chain.recommended when some path beats the baseline.
+    //
+    // Repeat builds: buildings ('bld' / 'space_bld') can appear multiple times
+    // in a single path.  Cost scales by priceRatio^count per copy; rates
+    // accumulate linearly via perUnitProvides.  This is what lets the beam
+    // answer "3rd mill vs. 2nd library".
+    function beamSearchFrontier(game, eg, frontier, craftsByOutput, goalId, opts) {
+        if (!frontier || frontier.length === 0) return null;
+
+        var startMs   = Date.now();
+        var maxDepth  = (opts && opts.maxDepth)  || 3;
+        var beamWidth = (opts && opts.beamWidth) || 4;
+        var budgetMs  = (opts && opts.budgetMs)  || 400;
+
+        var baseState = snapshotAlgebraicState(game, eg);
+
+        // Goal price — what we're ultimately saving for.  If missing, degrade
+        // to pure cumulative-build-time minimization (legacy behavior).
+        var goalNode  = goalId ? eg.nodes[goalId] : null;
+        var goalPrice = null;
+        if (goalNode) {
+            goalPrice = (goalNode.state === 'locked-ui') ? goalNode.unlockPrice : goalNode.price;
+        }
+        function tGoal(state) {
+            if (!goalPrice) return 0;
+            var t = timeToAffordInState(state, goalPrice, craftsByOutput);
+            return t.secs;
+        }
+        // When the goal is reachable, score = cumBuild + remaining wait (seconds).
+        // When not reachable (cap too small, no producer), fall back to a
+        // graded penalty so the beam can still rank "library (+250 science
+        // cap) vs hut (+0 science cap)".  Penalty components:
+        //   • cap shortfall: (goalAmt - cap) per unit unreachable via cap
+        //   • no production: (goalAmt - have) per unit of a zero-rate resource
+        // BIG_PENALTY ensures cap-limited paths always rank above reachable
+        // ones (beam prefers "finite wait" when it's an option) but different
+        // cap-limited paths can be meaningfully compared.
+        var BIG_PENALTY = 1e7;
+        function scoreOf(state, cumBuild) {
+            if (!goalPrice) return cumBuild;
+            var remaining = tGoal(state);
+            if (remaining !== Infinity) return cumBuild + remaining;
+            var gap = 0;
+            for (var i = 0; i < goalPrice.length; i++) {
+                var p    = goalPrice[i];
+                var have = state.resources[p.name] || 0;
+                if (have >= p.val) continue;
+                var cap  = state.caps[p.name]  || 0;
+                var rate = state.rates[p.name] || 0;
+                if (cap > 0 && cap < p.val)       gap += (p.val - cap);
+                if (rate <= 0 && have < p.val)    gap += (p.val - have);
+            }
+            return cumBuild + BIG_PENALTY + gap;
+        }
+
+        // Baseline: save for the goal with zero instrumentals.
+        var baselineScore = scoreOf(baseState, 0);
+
+        // Seed: one 1-step candidate per frontier node, state already advanced
+        // past that step so depth-1 scoring sees post-action rates.
+        var beam = [];
+        for (var i = 0; i < frontier.length; i++) {
+            var nodeId = frontier[i];
+            var node   = eg.nodes[nodeId];
+            if (!node) continue;
+            var price0 = _scaledPriceFor(node, 0);
+            var eta0   = timeToAffordInState(baseState, price0 || [], craftsByOutput);
+            if (eta0.secs === Infinity) continue;
+            var next0  = applyActionSymbolic(baseState, node, craftsByOutput, price0);
+            if (!next0) continue;
+            beam.push({
+                firstAction: nodeId,
+                path:        [nodeId],
+                state:       next0,
+                cumBuild:    eta0.secs,
+                counts:      _seedCounts(nodeId, node),
+                score:       scoreOf(next0, eta0.secs)
+            });
+        }
+        _beamSort(beam);
+        beam = beam.slice(0, beamWidth);
+
+        for (var depth = 1; depth < maxDepth; depth++) {
+            if (Date.now() - startMs > budgetMs || beam.length === 0) break;
+            var nextBeam = [];
+            for (var bi = 0; bi < beam.length; bi++) {
+                if (Date.now() - startMs > budgetMs) break;
+                var cand = beam[bi];
+                // Carry the shorter path forward — with goal-terminal scoring,
+                // a longer extension isn't automatically better.
+                nextBeam.push(cand);
+
+                var remaining = _beamRemaining(cand.path, frontier, cand.counts, eg);
+                for (var ri = 0; ri < remaining.length; ri++) {
+                    var nextId   = remaining[ri];
+                    var nextNode = eg.nodes[nextId];
+                    if (!nextNode) continue;
+                    var repeatCount = cand.counts[nextId] || 0;
+                    var scaledPrice = _scaledPriceFor(nextNode, repeatCount);
+                    var nextEta = timeToAffordInState(cand.state, scaledPrice || [], craftsByOutput);
+                    if (nextEta.secs === Infinity) continue;
+                    var nextState = applyActionSymbolic(cand.state, nextNode, craftsByOutput, scaledPrice);
+                    if (!nextState) continue;
+                    var newCumBuild = cand.cumBuild + nextEta.secs;
+                    nextBeam.push({
+                        firstAction: cand.firstAction,
+                        path:        cand.path.concat([nextId]),
+                        state:       nextState,
+                        cumBuild:    newCumBuild,
+                        counts:      _bumpCount(cand.counts, nextId),
+                        score:       scoreOf(nextState, newCumBuild)
+                    });
+                }
+            }
+            _beamSort(nextBeam);
+            beam = nextBeam.slice(0, beamWidth);
+        }
+
+        var elapsedMs = Date.now() - startMs;
+        var best = beam.length > 0 ? beam[0] : null;
+        if (typeof console !== "undefined" && console.log) {
+            var baseStr = (baselineScore === Infinity) ? '∞' : baselineScore.toFixed(0);
+            var bestStr = best
+                ? best.firstAction + ' score=' + best.score.toFixed(0) + 's cum=' + best.cumBuild.toFixed(0) + 's path=' + best.path.join('→')
+                : 'none';
+            console.log('[Beam] d=' + maxDepth + ' w=' + beamWidth +
+                ' ' + elapsedMs + 'ms baseline=' + baseStr + 's best=' + bestStr);
+        }
+        // Only override chain.recommended if some path genuinely beats
+        // save-for-goal.  Otherwise the caller uses its own fallback.
+        if (!best || best.score >= baselineScore) return null;
+        return best.firstAction;
+    }
+
+    function _beamSort(beam) {
+        beam.sort(function (a, b) { return a.score - b.score; });
+    }
+
+    // Scale a node's price for repeat builds: 2nd copy = base × ratio^1, etc.
+    // Only buildings scale; everything else returns its nominal price.
+    function _scaledPriceFor(node, repeatCount) {
+        var price = (node.state === 'locked-ui') ? node.unlockPrice : node.price;
+        if (!price || !repeatCount) return price;
+        if (node.kind !== 'bld' && node.kind !== 'space_bld') return price;
+        var ratio = node.priceRatio || 1.15;
+        var mult  = Math.pow(ratio, repeatCount);
+        var out = new Array(price.length);
+        for (var i = 0; i < price.length; i++) {
+            out[i] = { name: price[i].name, val: price[i].val * mult };
+        }
+        return out;
+    }
+
+    function _seedCounts(nodeId, node) {
+        var out = {};
+        if (node && (node.kind === 'bld' || node.kind === 'space_bld')) out[nodeId] = 1;
+        return out;
+    }
+
+    function _bumpCount(counts, nodeId) {
+        var out = {};
+        for (var k in counts) if (counts.hasOwnProperty(k)) out[k] = counts[k];
+        out[nodeId] = (out[nodeId] || 0) + 1;
+        return out;
+    }
+
+    // Remaining candidates.  Non-building nodes are consumed once per path
+    // (can't "research calendar twice").  Incremental buildings stay in the
+    // pool so the beam can represent "3rd mill vs. 2nd library".
+    function _beamRemaining(path, frontier, counts, eg) {
+        var out = [];
+        for (var i = 0; i < frontier.length; i++) {
+            var id = frontier[i];
+            var node = eg.nodes[id];
+            if (node && (node.kind === 'bld' || node.kind === 'space_bld')) {
+                out.push(id);
+            } else if (path.indexOf(id) < 0) {
+                out.push(id);
+            }
+        }
+        return out;
+    }
+
+    function planNextAction(game, eg) {
         var goalId = (typeof getTerminalGoal === "function") ? getTerminalGoal() : null;
         if (!goalId) return { kind: "no-goal" };
 
-        var scrape = scrapeGraph(game);
-        var eg = buildEdgeGraph(game, scrape);
+        var scrape;
+        if (!eg) {
+            scrape = scrapeGraph(game);
+            eg = buildEdgeGraph(game, scrape);
+            eg.__scrape = scrape;
+        } else {
+            scrape = eg.__scrape || scrapeGraph(game);
+        }
+
         var node = eg.nodes[goalId];
         if (!node) return { kind: "unknown-goal", goalId: goalId };
 
@@ -655,8 +1033,50 @@
         if (!chain || !chain.recommended) {
             return { kind: "blocked", goalId: goalId, chain: chain, reason: "no frontier" };
         }
-        var entry = chain.entries[chain.recommended];
-        var recNode = eg.nodes[chain.recommended];
+
+        // Beam candidate set: 'frontier' (chain-only) or 'goalAware' (B2 — wider).
+        var recommendedId = chain.recommended;
+        var beamUsed = false;
+        var beamEnabled = (typeof cfg !== 'undefined') ? (cfg.beamEnabled !== false) : true;
+        var candidateMode = (cfg && cfg.beamCandidateMode) || 'goalAware';
+
+        if (beamEnabled) {
+            var candidateIds;
+            if (candidateMode === 'goalAware') {
+                var baseState = snapshotAlgebraicState(game, eg);
+                var cand = collectGoalAwareCandidates(eg, chain, baseState);
+                var maxK = (cfg && cfg.beamMaxCandidates) || 10;
+                var pruned = pruneCandidates(eg, baseState, chain.__craftsByOutput || {}, cand, maxK);
+                candidateIds = pruned.map(function (s) { return s.id; });
+            } else {
+                candidateIds = chain.frontier;
+            }
+
+            if (candidateIds.length > 1) {
+                var beamOpts = {
+                    maxDepth:  (cfg && cfg.beamDepth)    || 3,
+                    beamWidth: (cfg && cfg.beamWidth)    || 4,
+                    budgetMs:  (cfg && cfg.beamBudgetMs) || 400
+                };
+                var beamId = beamSearchFrontier(game, eg, candidateIds, chain.__craftsByOutput || {}, goalId, beamOpts);
+                if (beamId) { recommendedId = beamId; beamUsed = true; }
+            }
+        }
+
+        var entry   = chain.entries[recommendedId];
+        var recNode = eg.nodes[recommendedId];
+        // Beam may pick a candidate outside chain.entries (e.g. a capRaiser
+        // surfaced by goalAware expansion). Synthesize an entry so downstream
+        // consumers (orchestrator, UI) have the standard { cost, etaSecs } shape.
+        if (!entry && recNode) {
+            var synthCost = (recNode.state === 'locked-ui') ? recNode.unlockPrice : recNode.price;
+            var etaR = timeToAfford(game, synthCost || [], chain.__craftsByOutput || {});
+            entry = {
+                id: recommendedId, state: recNode.state, children: [],
+                cost: synthCost || [], etaSecs: etaR.secs, capLimited: etaR.capLimited
+            };
+            chain.entries[recommendedId] = entry;
+        }
         var safetyNote = null;
 
         // Job-producer redirect: `job:X` is user-only (nothing to build), but
@@ -708,25 +1128,113 @@
         if (!action) {
             return {
                 kind: "blocked", goalId: goalId, chain: chain,
-                reason: "frontier is user-only (" + (recNode ? recNode.kind : "?") + " " + chain.recommended + ")"
+                reason: "frontier is user-only (" + (recNode ? recNode.kind : "?") + " " + recommendedId + ")"
             };
         }
         return {
             kind: "recommend", goalId: goalId,
             node: recNode, entry: entry, chain: chain,
             action: action, etaSecs: entry ? entry.etaSecs : Infinity,
-            safetyNote: safetyNote
+            safetyNote: safetyNote, beamUsed: beamUsed
         };
     }
 
     if (typeof window !== "undefined") {
         window.__chainBackward = function () {
             var goalId = getTerminalGoal(); if (!goalId) return null;
-            var scrape = scrapeGraph(gamePage);
-            var eg = buildEdgeGraph(gamePage, scrape);
+            var eg = (typeof getCachedEdgeGraph === 'function')
+                ? getCachedEdgeGraph(gamePage)
+                : buildEdgeGraph(gamePage, scrapeGraph(gamePage));
             var chain = chainBackward(eg, goalId);
-            annotateChainETA(gamePage, scrape, chain);
+            annotateChainETA(gamePage, eg.__scrape || scrapeGraph(gamePage), chain);
             return chain;
         };
+        window.__beamSearch = function () {
+            var eg = (typeof getCachedEdgeGraph === 'function')
+                ? getCachedEdgeGraph(gamePage)
+                : null;
+            return planNextAction(gamePage, eg);
+        };
+        window.__beamDebug = function () {
+            var savedD = cfg.beamDepth, savedW = cfg.beamWidth, savedB = cfg.beamBudgetMs;
+            cfg.beamDepth = 4; cfg.beamWidth = 8; cfg.beamBudgetMs = 3000;
+            var result = window.__beamSearch();
+            cfg.beamDepth = savedD; cfg.beamWidth = savedW; cfg.beamBudgetMs = savedB;
+            console.log('[beamDebug]', result);
+            return result;
+        };
         window.__dumpChain = dumpChain;
+        // Trace every OR-decision in the current chain with (rawLeaves,
+        // fanout, weighted score).  The option with the smallest score is
+        // the one chainBackward picks.  Rows marked ✓ are the picks.
+        window.__testFanout = function (goalId) {
+            goalId = goalId || getTerminalGoal();
+            if (!goalId) { console.warn('[testFanout] no goal'); return; }
+            var eg = (typeof getCachedEdgeGraph === 'function')
+                ? getCachedEdgeGraph(gamePage)
+                : buildEdgeGraph(gamePage, scrapeGraph(gamePage));
+            var chain = chainBackward(eg, goalId);
+            if (!chain) { console.warn('[testFanout] no chain'); return; }
+            var memo = {};
+            var rows = [];
+            var multiWay = 0, forced = 0;
+            var ids = Object.keys(chain.entries);
+            for (var i = 0; i < ids.length; i++) {
+                var e = chain.entries[ids[i]];
+                if (!e.options || e.options.length < 1) continue;
+                var kind = (e.options.length >= 2) ? 'OR' : 'forced';
+                if (e.capLimited) kind = 'cap(' + e.options.length + ')';
+                else if (e.prodLimited) kind = 'prod(' + e.options.length + ')';
+                if (e.options.length >= 2) multiWay++; else forced++;
+                for (var j = 0; j < e.options.length; j++) {
+                    var oid = e.options[j];
+                    var raw = _leafCount(chain.entries, oid, memo, eg);
+                    var fan = _effectiveFanout(eg, oid);
+                    var scored = _fanoutScore(raw, eg, oid);
+                    rows.push({
+                        parent: ids[i],
+                        kind:   kind,
+                        option: oid,
+                        rawLeaves: (raw === Infinity ? '∞' : Number(raw.toFixed(2))),
+                        fanout: fan,
+                        score:  (scored === Infinity ? '∞' : Number(scored.toFixed(2))),
+                        picked: (e.picked === oid) ? '✓' : ''
+                    });
+                }
+            }
+            console.log('[testFanout] fanoutWeight=' + cfg.fanoutWeight +
+                        ' goal=' + goalId + ' entries=' + ids.length +
+                        ' multiWayOR=' + multiWay + ' forced=' + forced +
+                        ' rows=' + rows.length);
+            console.table(rows);
+            return rows;
+        };
+        window.__dumpCandidates = function () {
+            var goalId = getTerminalGoal();
+            if (!goalId) { console.warn('[candidates] no terminal goal set'); return; }
+            var eg = (typeof getCachedEdgeGraph === 'function')
+                ? getCachedEdgeGraph(gamePage)
+                : buildEdgeGraph(gamePage, scrapeGraph(gamePage));
+            var scrape = eg.__scrape || scrapeGraph(gamePage);
+            var chain = chainBackward(eg, goalId);
+            annotateChainETA(gamePage, scrape, chain);
+            var baseState = snapshotAlgebraicState(gamePage, eg);
+            var cand = collectGoalAwareCandidates(eg, chain, baseState);
+            var maxK = (cfg && cfg.beamMaxCandidates) || 10;
+            var pruned = pruneCandidates(eg, baseState, chain.__craftsByOutput || {}, cand, maxK);
+            var rows = pruned.map(function (s) {
+                var n = eg.nodes[s.id];
+                return {
+                    id:       s.id,
+                    kind:     n.kind,
+                    state:    n.state,
+                    reason:   s.reason,
+                    priority: s.priority,
+                    etaSecs:  Number(s.eta.toFixed(1))
+                };
+            });
+            console.log('[candidates] goal=' + goalId + '  total=' + Object.keys(cand).length + '  pruned=' + rows.length);
+            console.table(rows);
+            return rows;
+        };
     }

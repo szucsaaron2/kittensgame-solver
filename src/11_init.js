@@ -10,6 +10,9 @@
 
     function init() {
         console.log('[Auto] v5.0 (queue planner + linear value model) initializing...');
+        window.__cfg       = cfg;
+        window.__lastPlan  = function () { return lastPlan; };
+        window.__execBuild = executeBuild;
         if (gamePage.ui && typeof gamePage.ui.confirm === 'function') {
             gamePage.ui.confirm = function (t, m, cb) { if (cb) cb(); return true; };
         }
