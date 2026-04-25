@@ -33,18 +33,24 @@
             return;
         }
         if (p.kind === 'blocked') {
+            var blkBadge = (p.__goalSource === 'ssp')
+                ? ' <span style="color:#0af;font-size:9px;border:1px solid #057;border-radius:2px;padding:0 3px;">SSP</span>'
+                : '';
             candidatesEl.innerHTML = '<div style="font-size:11px;">'
                 + '<span style="color:#888;font-size:10px;">GOAL</span> '
-                + '<span style="color:#0f0;">' + p.goalId + '</span></div>'
+                + '<span style="color:#0f0;">' + p.goalId + '</span>' + blkBadge + '</div>'
                 + '<div style="font-size:10px;color:#a55;margin-left:8px;">&#8627; ' + (p.reason || 'blocked') + '</div>';
             return;
         }
         // recommend
         var entry = p.entry;
         var ready = entry && entry.state === 'ready';
+        var goalBadge = (p.__goalSource === 'ssp')
+            ? ' <span style="color:#0af;font-size:9px;border:1px solid #057;border-radius:2px;padding:0 3px;">SSP</span>'
+            : '';
         var h = '<div style="font-size:11px;margin:1px 0;">'
             + '<span style="color:#888;font-size:10px;">GOAL</span> '
-            + '<span style="color:#0f0;">' + p.goalId + '</span></div>';
+            + '<span style="color:#0f0;">' + p.goalId + '</span>' + goalBadge + '</div>';
         var actTime = ready
             ? '<span style="color:#0f0;">READY</span>'
             : '<span style="color:#aa0;">' + formatTime(Math.round(p.etaSecs || 0)) + '</span>';
@@ -63,6 +69,87 @@
             h += '<div style="font-size:10px;color:#a55;margin-left:8px;">&#8627; ' + p.safetyNote + '</div>';
         }
         candidatesEl.innerHTML = h;
+    }
+
+    function updateSspDisplay() {
+        var section = document.getElementById('mcts_ssp_section');
+        var pendingEl = document.getElementById('mcts_ssp_pending');
+        var tableEl = document.getElementById('mcts_ssp_table');
+        if (!section || !pendingEl || !tableEl) return;
+
+        if (!cfg.sspEnabled) { section.style.display = 'none'; return; }
+        section.style.display = '';
+
+        // Pending observation panel.
+        try {
+            var pending = (typeof _sspPendingObservation === 'function')
+                ? _sspPendingObservation() : null;
+            if (pending) {
+                var elapsed = (Date.now() - pending.startedAtMs) / 1000;
+                var ratio = elapsed / pending.predictedSecs;
+                var col = ratio > 1.5 ? '#a55' : (ratio > 1.05 ? '#aa0' : '#0a7');
+                pendingEl.innerHTML = '<span style="color:#555;">tracking</span> '
+                    + '<span style="color:#0f0;">' + pending.goalId + '</span> '
+                    + '<span style="color:' + col + ';">'
+                    + formatTime(Math.round(elapsed)) + '/' + formatTime(Math.round(pending.predictedSecs))
+                    + '</span>';
+            } else {
+                pendingEl.innerHTML = '<span style="color:#555;">no goal in flight</span>';
+            }
+        } catch (e) { pendingEl.textContent = 'err: ' + e.message; }
+
+        // Top-5 ranking with bias / count.
+        try {
+            if (!lastSspResult || !lastSspResult.ranking || !lastSspResult.ranking.length) {
+                tableEl.innerHTML = '<span style="color:#555;">computing...</span>';
+                return;
+            }
+            var rows = lastSspResult.ranking.slice(0, 5);
+            var html = '';
+            for (var i = 0; i < rows.length; i++) {
+                var r = rows[i];
+                var rec = (typeof getSspBeliefRecord === 'function')
+                    ? getSspBeliefRecord(r.id) : { bias: 1, count: 0, effective: 1 };
+                var biasCol = rec.count === 0 ? '#555'
+                    : (Math.abs(rec.bias - 1) < 0.1 ? '#888'
+                       : (rec.bias > 1 ? '#a70' : '#077'));
+                var vStr = isFinite(r.V) ? formatTime(Math.round(r.V)) : '∞';
+                html += '<div style="margin:1px 0;display:flex;gap:4px;align-items:baseline;">'
+                    + '<span style="color:#888;width:14px;text-align:right;">' + (i + 1) + '.</span>'
+                    + '<span style="color:#0f0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + r.id + '</span>'
+                    + '<span style="color:#aa0;min-width:36px;text-align:right;">' + vStr + '</span>'
+                    + '<span style="color:' + biasCol + ';min-width:32px;text-align:right;" title="raw bias × count">'
+                    + rec.bias.toFixed(2) + '×' + rec.count + '</span>'
+                    + '</div>';
+            }
+            tableEl.innerHTML = html;
+        } catch (e) { tableEl.textContent = 'err: ' + e.message; }
+    }
+
+    function updatePhaseDisplay() {
+        var nowEl = document.getElementById('mcts_phase_now');
+        var logElP = document.getElementById('mcts_phase_log');
+        if (!nowEl || !logElP) return;
+        try {
+            var current = (typeof getCurrentPhase === 'function') ? getCurrentPhase() : null;
+            if (current && current.tier >= 0) {
+                nowEl.innerHTML = '<span style="color:#888;font-size:9px;">T' + current.tier + '</span> '
+                    + '<span style="color:#fa0;">' + current.name + '</span>';
+            } else {
+                nowEl.innerHTML = '<span style="color:#555;">—</span>';
+            }
+            var log = (typeof getPhaseLog === 'function') ? getPhaseLog() : [];
+            var rows = log.slice(-5).reverse();   // newest first, last 5
+            var h = '';
+            for (var i = 0; i < rows.length; i++) {
+                var e = rows[i];
+                var when = (e.year != null) ? ('Y' + e.year) : new Date(e.atMs).toLocaleTimeString();
+                h += '<div>→ T' + e.tier + ' '
+                    + '<span style="color:#fa0;">' + e.name + '</span> '
+                    + '<span style="color:#666;">(' + when + ')</span></div>';
+            }
+            logElP.innerHTML = h || '<span style="color:#555;">no transitions yet</span>';
+        } catch (e) { nowEl.textContent = 'err: ' + e.message; }
     }
 
     function updateLogDisplay() {
@@ -91,7 +178,8 @@
             + '<div id="mcts_body" style="padding:8px 10px;">'
                 + '<div style="margin-bottom:6px;display:flex;align-items:center;gap:10px;">'
                     + '<label style="cursor:pointer;"><input type="checkbox" id="mcts_cb_engine"> Enable</label>'
-                    + '<label style="cursor:pointer;"><input type="checkbox" id="mcts_cb_observe"> Observe</label></div>'
+                    + '<label style="cursor:pointer;"><input type="checkbox" id="mcts_cb_observe"> Observe</label>'
+                    + '<label style="cursor:pointer;" title="Use SSP-Dynamic to auto-pick the terminal goal each cycle."><input type="checkbox" id="mcts_cb_ssp"> SSP</label></div>'
                 + '<div style="margin-bottom:4px;display:flex;align-items:center;gap:6px;">'
                     + '<span style="color:#888;font-size:11px;">Clicker:</span>'
                     + '<input type="range" id="mcts_slider_clicker" min="0" max="250" value="0" style="flex:1;accent-color:#0a0;">'
@@ -110,6 +198,9 @@
                 + '<div style="margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;">'
                     + '<span style="color:#888;font-size:11px;">Faith reserve</span>'
                     + '<input type="number" id="mcts_input_faith_reserve" min="0" step="1" value="0" style="width:70px;background:#111;border:1px solid #333;color:#0f0;font-family:inherit;font-size:11px;padding:2px 4px;text-align:right;"></div>'
+                + '<div style="margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;" title="Trades per cycle with zebras when ships ≥ floor. 0 = off.">'
+                    + '<span style="color:#888;font-size:11px;">Ti trade burst</span>'
+                    + '<input type="number" id="mcts_input_ti_burst" min="0" max="500" step="1" value="25" style="width:70px;background:#111;border:1px solid #333;color:#0f0;font-family:inherit;font-size:11px;padding:2px 4px;text-align:right;"></div>'
                 + '<div style="margin-bottom:4px;">'
                     + '<div style="color:#888;font-size:11px;margin-bottom:2px;">Terminal goal</div>'
                     + '<input id="mcts_input_goal" list="mcts_goal_options" placeholder="type to search (e.g. tech:calendar)" style="width:100%;box-sizing:border-box;background:#111;border:1px solid #333;color:#0f0;font-family:inherit;font-size:11px;padding:2px 4px;">'
@@ -124,6 +215,14 @@
                 + '<div style="border-top:1px solid #222;padding-top:4px;margin-bottom:4px;">'
                     + '<div style="color:#555;font-size:10px;margin-bottom:2px;">DECISION</div>'
                     + '<div id="mcts_candidates" style="min-height:20px;"></div></div>'
+                + '<div id="mcts_ssp_section" style="border-top:1px solid #222;padding-top:4px;display:none;">'
+                    + '<div style="color:#057;font-size:10px;margin-bottom:2px;">SSP <span style="color:#555;">(top 5)</span></div>'
+                    + '<div id="mcts_ssp_pending" style="font-size:10px;color:#888;margin-bottom:2px;"></div>'
+                    + '<div id="mcts_ssp_table" style="font-size:10px;"></div></div>'
+                + '<div id="mcts_phase_section" style="border-top:1px solid #222;padding-top:4px;">'
+                    + '<div style="color:#a70;font-size:10px;margin-bottom:2px;">PHASE</div>'
+                    + '<div id="mcts_phase_now" style="font-size:11px;color:#fa0;margin-bottom:2px;">—</div>'
+                    + '<div id="mcts_phase_log" style="font-size:10px;color:#aa6;max-height:60px;overflow-y:auto;"></div></div>'
                 + '<div style="border-top:1px solid #222;padding-top:4px;">'
                     + '<div style="color:#555;font-size:10px;margin-bottom:2px;">LOG</div>'
                     + '<div id="mcts_log" style="max-height:180px;overflow-y:auto;"></div></div>'
@@ -146,6 +245,7 @@
 
         wireToggle('mcts_cb_engine', 'mctsEnabled');
         wireToggle('mcts_cb_observe', 'autoObserve');
+        wireToggle('mcts_cb_ssp', 'sspEnabled');
         wireSlider('mcts_slider_clicker', 'clicksPerSec', function (v) {
             setClickerRate(v); document.getElementById('mcts_lbl_clicker').textContent = v === 0 ? 'Off' : v + '/sec';
         });
@@ -228,6 +328,7 @@
 
         document.getElementById('mcts_cb_engine').checked = cfg.mctsEnabled;
         document.getElementById('mcts_cb_observe').checked = cfg.autoObserve;
+        document.getElementById('mcts_cb_ssp').checked = !!cfg.sspEnabled;
         document.getElementById('mcts_slider_clicker').value = cfg.clicksPerSec;
         document.getElementById('mcts_lbl_clicker').textContent = cfg.clicksPerSec === 0 ? 'Off' : cfg.clicksPerSec + '/sec';
         document.getElementById('mcts_slider_interval').value = cfg.decisionIntervalMs / 1000;
@@ -245,6 +346,13 @@
         faithInput.addEventListener('change', function () {
             var v = parseFloat(faithInput.value); if (isNaN(v) || v < 0) v = 0;
             faithInput.value = v; cfg.faithPraiseReserve = v; saveCfg();
+        });
+
+        var tiBurstInput = document.getElementById('mcts_input_ti_burst');
+        tiBurstInput.value = (cfg.titaniumTradeBatch != null) ? cfg.titaniumTradeBatch : 25;
+        tiBurstInput.addEventListener('change', function () {
+            var v = parseInt(tiBurstInput.value); if (isNaN(v) || v < 0) v = 0;
+            tiBurstInput.value = v; cfg.titaniumTradeBatch = v; saveCfg();
         });
 
         var speedSlider = document.getElementById('mcts_slider_speed');

@@ -134,9 +134,54 @@
                 }
             }
             if (wasteful) continue;
-            try { gamePage.diplomacy.tradeMultiple(race, 1); traded = true; } catch (e) { }
+            // Zebras + sufficient ships: burst-trade for titanium acceleration.
+            // The game's getMaxTradeAmt respects gold/manpower/buy-resource limits.
+            var amount = 1;
+            if (_TRADE_PARTNERS[i] === 'zebras') {
+                var burst = _titaniumBurstAmount(race);
+                if (burst > 1) amount = burst;
+            }
+            try { gamePage.diplomacy.tradeMultiple(race, amount); traded = true; } catch (e) { }
         }
         if (traded) { try { gamePage.updateCaches(); } catch (e) { } }
+    }
+
+    // Compute zebra trade burst for titanium speedrun.  Returns 1 (no-op)
+    // if disabled, ships floor not met, titanium near cap, or game lacks
+    // getMaxTradeAmt.  Otherwise: min(cfg.titaniumTradeBatch, maxAffordable),
+    // also subtracting the gold reserve from gold-based affordability.
+    function _titaniumBurstAmount(zebras) {
+        var batch = (cfg.titaniumTradeBatch | 0);
+        if (batch <= 1) return 1;
+
+        var ships = gamePage.resPool && gamePage.resPool.get('ship');
+        var floor = cfg.titaniumTradeShipFloor | 0;
+        if (!ships || ships.value < floor) return 1;
+
+        // Don't waste trades when titanium is already capped.
+        var ti = gamePage.resPool.get('titanium');
+        if (ti && ti.maxValue > 0 && ti.value >= ti.maxValue * 0.95) return 1;
+
+        var maxFromGame = 1;
+        try {
+            if (typeof gamePage.diplomacy.getMaxTradeAmt === 'function') {
+                maxFromGame = gamePage.diplomacy.getMaxTradeAmt(zebras) | 0;
+            }
+        } catch (e) { return 1; }
+        if (maxFromGame < 1) return 1;
+
+        // Honor the gold reserve: getMaxTradeAmt doesn't know about it, so
+        // re-derive a gold-bounded ceiling and take the min.
+        var goldCost = 0;
+        try { goldCost = gamePage.diplomacy.getGoldCost(); } catch (e) { goldCost = 15; }
+        var gold = gamePage.resPool.get('gold');
+        var reserve = cfg.goldTradeReserve || 0;
+        var goldBound = (gold && goldCost > 0)
+            ? Math.max(0, Math.floor((gold.value - reserve) / goldCost))
+            : maxFromGame;
+
+        var n = Math.min(batch, maxFromGame, goldBound);
+        return n > 1 ? n : 1;
     }
 
     var _EXPLORE_COST = 1000;

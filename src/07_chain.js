@@ -67,14 +67,28 @@
                     scaled.push({ name: recipe.inputs[k].name, val: recipe.inputs[k].val * batches });
                 }
                 _gatherProdHelpers(game, eg, scaled, helpers, seen);
-            } else if ((r.perTickCached || 0) <= 0) {
-                var producers = (eg.producersOf && eg.producersOf[p.name]) || [];
-                for (var pi2 = 0; pi2 < producers.length; pi2++) {
-                    var pid = producers[pi2];
-                    var pNode = eg.nodes[pid];
-                    if (pNode && pNode.state !== "done"
-                        && helpers.indexOf(pid) < 0) {
-                        helpers.push(pid);
+            } else {
+                // No craft path. Surface producers when rate is non-positive
+                // OR when the rate is too low to satisfy this cost in a
+                // reasonable horizon — otherwise the chain declares a
+                // marginal +0.1/s "solved" and never plans more producers,
+                // which is what stalls early-game catnip when one farmer
+                // barely covers one kitten's consumption.
+                var rate = r.perTickCached || 0;
+                var tps = (game && game.ticksPerSecond) || 5;
+                var deficit = p.val - (r.value || 0);
+                var secsToAfford = (rate > 0) ? (deficit / (rate * tps)) : Infinity;
+                var horizonSecs = (cfg && typeof cfg.prodHelperHorizonSecs === 'number')
+                    ? cfg.prodHelperHorizonSecs : 600;   // 10 min default
+                if (rate <= 0 || secsToAfford > horizonSecs) {
+                    var producers = (eg.producersOf && eg.producersOf[p.name]) || [];
+                    for (var pi2 = 0; pi2 < producers.length; pi2++) {
+                        var pid = producers[pi2];
+                        var pNode = eg.nodes[pid];
+                        if (pNode && pNode.state !== "done"
+                            && helpers.indexOf(pid) < 0) {
+                            helpers.push(pid);
+                        }
                     }
                 }
             }
@@ -226,7 +240,10 @@
                         var p = cost[ci];
                         var r = game.resPool.get(p.name);
                         if (!r) continue;
-                        if (r.maxValue && p.val > r.maxValue) {
+                        // Cap-limited iff price exceeds storage. maxValue=0
+                        // means "no storage exists" — that IS cap-limited
+                        // (e.g. science cap at cold start with no library).
+                        if (p.val > r.maxValue) {
                             var raisers = (eg.capRaisersOf && eg.capRaisersOf[p.name]) || [];
                             for (var ri = 0; ri < raisers.length; ri++) {
                                 var rNode = eg.nodes[raisers[ri]];
@@ -564,7 +581,7 @@
     //      mansion, logHouse) spawn new kittens who consume catnip.  Require
     //      ~0.85/sec of catnip headroom per additional slot.
     // Returns null if safe, or { res, reason } if unsafe.
-    function _runwayCheck(game, node) {
+    function _runwayCheck(game, node, entry) {
         if (!node || (node.kind !== "bld" && node.kind !== "space_bld")) return null;
         var meta = null;
         if (node.kind === "bld" && game.bld && game.bld.get) {
@@ -600,14 +617,60 @@
             }
         }
 
-        // (2) Kitten-slot housing check.  maxKittens effect → new kitten worth
-        // of catnip consumption must already be covered by current margin.
-        var raisesKittens = (eff.maxKittens || 0) > 0;
-        if (raisesKittens) {
+        // (2) Kitten-slot housing check.  maxKittens effect → new kittens
+        // will spawn and each consumes ~0.85 catnip/sec.  Project current
+        // rate AT FULL OCCUPANCY of the new slots: rate must remain non-
+        // negative once every new slot is filled.  This catches the
+        // "build a hut, two kittens spawn, catnip locks at 0" stall.
+        var newSlots = eff.maxKittens || 0;
+        if (newSlots > 0) {
             var catnip = game.resPool.get("catnip");
-            var marginPerKittenPerTick = 0.85 / tps;  // ~0.85/sec per kitten
-            if (catnip && (catnip.perTickCached || 0) < marginPerKittenPerTick) {
-                return { res: "catnip", reason: "catnip margin insufficient for new kitten" };
+            // Bare per-kitten consumption is ~0.85/sec.  Knife-edge balance
+            // (margin == 0.85 × slots) means catnip stays at 0 forever —
+            // there's no surplus to pay for further catnip-priced builds, and
+            // any seasonal/scholar dip flips the rate negative.  Demand a
+            // headroom buffer so post-occupancy production exceeds bare
+            // consumption by a multiplier.
+            var perKittenPerSec = 0.85;
+            var headroom = (cfg && typeof cfg.housingHeadroom === 'number')
+                ? cfg.housingHeadroom : 1.25;   // 25% buffer over bare burn
+            var requiredPerSec = newSlots * perKittenPerSec * headroom;
+            var requiredPerTick = requiredPerSec / tps;
+            if (catnip && (catnip.perTickCached || 0) < requiredPerTick) {
+                return { res: "catnip", reason:
+                    "catnip rate " + ((catnip.perTickCached || 0) * tps).toFixed(2)
+                    + "/s insufficient for " + newSlots + " new kitten slot(s) "
+                    + "(need ≥" + requiredPerSec.toFixed(2) + "/s with "
+                    + headroom + "× headroom)" };
+            }
+        }
+
+        // (3) Catnip-spend safety.  Any build whose price includes catnip
+        // commits us to draining stock at construction time.  If the post-
+        // spend stock + rate*horizon would still be ≤ 0, we'll just stall at
+        // 0 catnip after building (every kitten at the floor).  Redirect to a
+        // catnip producer so production climbs first.
+        var spendHorizon = (cfg && typeof cfg.catnipSpendSafetyHorizonSecs === 'number')
+            ? cfg.catnipSpendSafetyHorizonSecs : 30;
+        if (spendHorizon > 0 && entry && entry.cost) {
+            for (var ci = 0; ci < entry.cost.length; ci++) {
+                var pe = entry.cost[ci];
+                if (pe.name !== "catnip") continue;
+                var cres = game.resPool.get("catnip");
+                if (!cres) break;
+                var stock = cres.value || 0;
+                var rateSec = (cres.perTickCached || 0) * tps;
+                var afterSpend = stock - pe.val;
+                var projected = afterSpend + rateSec * spendHorizon;
+                if (projected <= 0) {
+                    return { res: "catnip", reason:
+                        "post-spend catnip projection ≤ 0 "
+                        + "(stock " + stock.toFixed(1)
+                        + " − cost " + pe.val.toFixed(1)
+                        + " + rate " + rateSec.toFixed(2) + "/s × "
+                        + spendHorizon + "s = " + projected.toFixed(1) + ")" };
+                }
+                break;
             }
         }
         return null;
@@ -649,6 +712,10 @@
             var pnode = eg.nodes[pid];
             if (!pnode) continue;
             if (pnode.state === "done") continue;
+            // Skip jobs — doAutoJobs handles assignment.  Runway redirects
+            // need a NEW production source (a building), not a kitten
+            // reshuffle that produces nothing extra.
+            if (pnode.kind === "job") continue;
             var sub = chainBackward(eg, pid);
             if (!sub) continue;
             annotateChainETA(game, scrape, sub);
@@ -656,6 +723,43 @@
             if (!subEntry) continue;
             var eta = (subEntry.etaSecs === undefined) ? Infinity : subEntry.etaSecs;
             if (eta < bestScore) { bestScore = eta; bestId = pid; }
+        }
+        return bestId;
+    }
+
+    // Cap-horizon guard: when an entry is cap-limited (price exceeds storage
+    // and no craft escape exists), find the cheapest cap-raiser by chain-back
+    // ETA and return its id. Returns null if no helpful raiser exists.
+    function _findCapHorizonRaiser(game, scrape, eg, entry) {
+        if (!entry || !entry.cost || !entry.cost.length) return null;
+        if (!eg.capRaisersOf) return null;
+
+        var bestId = null, bestEta = Infinity;
+        for (var i = 0; i < entry.cost.length; i++) {
+            var p = entry.cost[i];
+            var res = game.resPool && game.resPool.get(p.name);
+            if (!res) continue;
+            // Only resources whose cap is the actual blocker.
+            if (!res.maxValue || res.maxValue === 0) continue;
+            if (res.maxValue >= p.val) continue;
+
+            var raisers = eg.capRaisersOf[p.name] || [];
+            for (var j = 0; j < raisers.length; j++) {
+                var rid = (typeof raisers[j] === 'string') ? raisers[j] : raisers[j].id;
+                var rnode = eg.nodes[rid];
+                if (!rnode || rnode.state === 'done') continue;
+                if (!_isExecutableKind(rnode.kind)) continue;
+                var sub = chainBackward(eg, rid);
+                if (!sub) continue;
+                annotateChainETA(game, scrape, sub);
+                if (!sub.recommended) continue;
+                var subEntry = sub.entries[sub.recommended];
+                if (!subEntry) continue;
+                // Skip raisers that are themselves cap-limited (loop) or out of reach.
+                if (subEntry.capLimited) continue;
+                var eta = (subEntry.etaSecs === undefined) ? Infinity : subEntry.etaSecs;
+                if (eta < bestEta) { bestEta = eta; bestId = rid; }
+            }
         }
         return bestId;
     }
@@ -1009,8 +1113,9 @@
         return out;
     }
 
-    function planNextAction(game, eg) {
-        var goalId = (typeof getTerminalGoal === "function") ? getTerminalGoal() : null;
+    function planNextAction(game, eg, opts) {
+        var goalId = (opts && opts.goalIdOverride)
+            || ((typeof getTerminalGoal === "function") ? getTerminalGoal() : null);
         if (!goalId) return { kind: "no-goal" };
 
         var scrape;
@@ -1101,7 +1206,7 @@
 
         // Runway safety: if the recommended build is unsafe, swap to a
         // producer of the threatened resource.  One redirect step only.
-        var unsafe = _runwayCheck(game, recNode);
+        var unsafe = _runwayCheck(game, recNode, entry);
         if (unsafe) {
             var producerIds = (eg.producersOf && eg.producersOf[unsafe.res]) || [];
             var swapId = _pickBestProducer(game, scrape, eg, producerIds);
@@ -1122,6 +1227,25 @@
             entry = chain.entries[chain.recommended];
             recNode = eg.nodes[chain.recommended];
             safetyNote = unsafe.res + " safety: routing via " + swapId;
+        }
+
+        // Cap-horizon guard: if the chosen entry is structurally unreachable
+        // because cost > storage cap and no craft escape, redirect to the
+        // cheapest cap-raiser. Skip when another safety redirect already fired,
+        // or when cfg.capHorizon === false (kill-switch).
+        var capHorizonOn = !cfg || cfg.capHorizon !== false;
+        if (capHorizonOn && !safetyNote && entry && entry.capLimited) {
+            var raiserId = _findCapHorizonRaiser(game, scrape, eg, entry);
+            if (raiserId && raiserId !== chain.recommended) {
+                var capChain = chainBackward(eg, raiserId);
+                annotateChainETA(game, scrape, capChain);
+                if (capChain.recommended) {
+                    chain = capChain;
+                    entry = chain.entries[chain.recommended];
+                    recNode = eg.nodes[chain.recommended];
+                    safetyNote = "cap-horizon: routing via " + raiserId;
+                }
+            }
         }
 
         var action = nodeToAction(recNode);

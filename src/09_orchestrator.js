@@ -57,11 +57,47 @@
         var cycleStartMs = Date.now();
         var eg = (typeof getCachedEdgeGraph === 'function')
             ? getCachedEdgeGraph(gamePage) : null;
-        var plan = planNextAction(gamePage, eg);
+
+        // SSP-Dynamic active mode (Phase 2): override the user goal with the
+        // SSP top pick.  Falls back to user goal silently on any failure.
+        var sspPlanOpts = null;
+        var sspPickedGoal = null;
+        var sspPredictedSecs = null;
+        if (cfg.sspEnabled && typeof pickTerminalGoalSSP === 'function' && eg) {
+            try {
+                var sspResult = pickTerminalGoalSSP(gamePage, eg);
+                if (sspResult && sspResult.ranking && sspResult.ranking.length > 0) {
+                    sspPickedGoal = sspResult.ranking[0].id;
+                    sspPredictedSecs = sspResult.V ? sspResult.V[sspPickedGoal] : null;
+                    sspPlanOpts = { goalIdOverride: sspPickedGoal };
+                }
+                lastSspResult = sspResult;  // expose to UI for debug panel
+            } catch (e) { console.warn('[SSP] pick failed, using user goal', e); }
+        } else {
+            lastSspResult = null;
+        }
+
+        // Phase 4: feedback loop — track predicted vs actual completion time.
+        if (typeof _sspFeedbackTick === 'function') {
+            if (cfg.sspEnabled) _sspFeedbackTick(eg, sspPickedGoal, sspPredictedSecs);
+            else if (typeof _sspAbandonObservation === 'function') _sspAbandonObservation();
+        }
+
+        var plan = planNextAction(gamePage, eg, sspPlanOpts);
         var cycleMs = Date.now() - cycleStartMs;
         plan.__cycleMs = cycleMs;
+        plan.__goalSource = sspPickedGoal ? 'ssp' : 'user';
+        if (sspPickedGoal) plan.__sspPickedGoal = sspPickedGoal;
         if (cycleMs > 500) console.log('[Cycle] planNextAction took ' + cycleMs + 'ms');
         lastPlan = plan;
+
+        // SSP-Dynamic shadow ranking (Phase 1: observation only, no behavior change).
+        try {
+            if (cfg.sspShadow && typeof _sspShadowTick === 'function') {
+                var userGoal = (typeof getTerminalGoal === 'function') ? getTerminalGoal() : null;
+                _sspShadowTick(gamePage, eg, userGoal);
+            }
+        } catch (e) { console.warn('[SSP] shadow tick failed', e); }
 
         if (plan.kind === "no-goal") {
             setStatus('<span style="color:#888;">Pick a terminal goal to start planning.</span>', true);
@@ -110,7 +146,12 @@
         }
 
         _cycleCtx = null;
+        try {
+            if (typeof recordPhaseSample === 'function') recordPhaseSample(gamePage);
+        } catch (e) { console.warn('[PhaseSensor]', e); }
         updateQueueDisplay();
+        try { if (typeof updateSspDisplay === 'function') updateSspDisplay(); } catch (e) { }
+        try { if (typeof updatePhaseDisplay === 'function') updatePhaseDisplay(); } catch (e) { }
         updateLogDisplay();
     }
 

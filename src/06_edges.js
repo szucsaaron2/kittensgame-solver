@@ -453,6 +453,26 @@
             }
         }
 
+        // Register jobs as producers/consumers from their jobModifiers.  Jobs
+        // intentionally keep provides.resources empty (symbolic state would
+        // miscount), but the chain-backward search needs to know which jobs
+        // produce a given resource so prod-helpers can surface housing /
+        // unlocker chains (e.g. wood is produced by job:woodcutter, which
+        // requires kittens from bld:hut).  jobModifiers keys are bare resource
+        // names ("wood": 0.018), not effect keys, so we don't go through
+        // _parseEffectKey here.
+        for (var i = 0; i < ids.length; i++) {
+            var n = nodes[ids[i]];
+            if (n.kind !== "job" || !n.jobModifiers) continue;
+            for (var resName in n.jobModifiers) {
+                if (!n.jobModifiers.hasOwnProperty(resName)) continue;
+                var rate = n.jobModifiers[resName];
+                if (!rate || rate <= 0) continue;
+                var bucket = (producersOf[resName] = producersOf[resName] || []);
+                if (bucket.indexOf(n.id) < 0) bucket.push(n.id);
+            }
+        }
+
         // Second pass: for locked-prereq nodes, fill prereqs from unlockedBy.
         for (var i = 0; i < ids.length; i++) {
             var n = nodes[ids[i]];

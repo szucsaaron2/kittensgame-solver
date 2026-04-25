@@ -33,6 +33,48 @@
         beamBudgetMs:       400,
         beamCandidateMode:  'goalAware',   // 'goalAware' | 'frontier'
         beamMaxCandidates:  10,
+        // ── SSP-Dynamic shadow mode (Phase 1) ────────────────────────────────
+        // When true, every queue cycle computes a Bellman ranking over
+        // candidate terminal goals and logs it to _sspShadowLog.  Pure
+        // observation — does NOT change the user-selected cfg.terminalGoal.
+        // Inspect with window.__sspDebug() / window.__sspAgreement().
+        sspShadow:          true,
+        // ── SSP-Dynamic active mode (Phase 2) ────────────────────────────────
+        // When true, the orchestrator overrides cfg.terminalGoal with the SSP
+        // top pick each cycle.  When false, the user's goal selection is used
+        // as before (legacy behaviour).  Default false — opt-in.
+        sspEnabled:         false,
+        // ── Cap-horizon guard ────────────────────────────────────────────────
+        // When the chosen action is cap-limited (price > storage with no craft
+        // escape), redirect to the cheapest cap-raiser. Default on; flip to
+        // false to fall back to legacy stall-and-wait behaviour.
+        capHorizon:         true,
+        // ── Titanium burst trading ───────────────────────────────────────────
+        // Zebras give titanium per trade (0.35% + 0.35% per ship). Background
+        // trading at 1/cycle is too slow for speedrunning the iron→industry
+        // hop. When zebras are unlocked and ships ≥ ShipFloor, fire up to
+        // Batch trades per cycle (capped by the game's getMaxTradeAmt).
+        // Set Batch=0 to disable.
+        titaniumTradeBatch:    25,
+        titaniumTradeShipFloor: 1,
+        // ── OR-picker fanout weighting ───────────────────────────────────────
+        // _leafCount's OR selector divides each option's leaf-cost by
+        // (1 + fanoutWeight × effectiveFanout). 0 recovers the legacy
+        // cheapest-chain-by-count behavior; 1 biases strongly toward gateways.
+        fanoutWeight:       1.0,
+        // ── Prod-helper horizon ──────────────────────────────────────────────
+        // When chain backward sees a positive but tiny resource rate, it can
+        // declare the cost "satisfied" and skip surfacing producers — even if
+        // the real time-to-afford is hours.  This horizon (seconds) is the cap:
+        // if deficit / rate > horizon, treat as prod-limited and surface
+        // producers anyway.  600s = 10 min keeps early-game catnip aggressive.
+        prodHelperHorizonSecs: 600,
+        // ── Housing safety headroom ──────────────────────────────────────────
+        // Multiplier on the bare per-kitten catnip burn (0.85/s) that the
+        // post-occupancy projection demands before allowing a housing build.
+        // 1.0 = knife-edge (rate plateaus at 0), 1.25 = 25% surplus headroom.
+        // Higher values push the planner toward more fields per hut.
+        housingHeadroom: 2.0,
     };
 
     function saveCfg() {
@@ -61,6 +103,8 @@
     var instantBoughtKeys = {};
     // Snapshot of the last planNextAction() result — consumed by UI.
     var lastPlan = null;
+    // Snapshot of the last SSP ranking — consumed by UI debug panel.
+    var lastSspResult = null;
 
     // Shared resolve-context hint for one orchestrator cycle (ratio/craft-price caches).
     var _cycleCtx = null;
@@ -814,6 +858,10 @@
     // =========================================================================
 
     // ── Snapshot ─────────────────────────────────────────────────────────────
+    // KG constants — keep in sync with 05_graph.js.
+    var _KITTEN_BIRTH_PER_TICK = 0.01;  // base birth/tick when catnip rate > 0
+    var _CATNIP_PER_KITTEN_PER_TICK = 0.85;  // kitten appetite/tick
+
     function snapshotAlgebraicState(game, eg) {
         var tps = game.ticksPerSecond || 5;
         var resources = {}, rates = {}, caps = {}, unlocks = {};
@@ -833,18 +881,63 @@
             }
         }
 
+        // Population snapshot.  Kittens aren't a resPool resource — they live
+        // in game.village.sim.  rates.catnip already includes CURRENT kittens'
+        // appetite via perTickCached, so we only need to subtract NEW kittens'
+        // appetite when symbolic time-advance spawns more.
+        var village = game.village || {};
+        var sim     = village.sim || {};
+        var kittens = (sim.kittens && sim.kittens.length) || 0;
+        var free    = (typeof village.getFreeKittens === 'function')
+                      ? village.getFreeKittens()
+                      : 0;
+        var assignments = {};
+        var jobsArr = village.jobs || [];
+        for (var ji = 0; ji < jobsArr.length; ji++) {
+            assignments[jobsArr[ji].name] = jobsArr[ji].value || 0;
+        }
+        var pop = {
+            kittens:         kittens,
+            maxKittens:      village.maxKittens || 0,
+            free:            free,
+            happiness:       village.happiness || 1,
+            assignments:     assignments,
+            birthRatePerSec: _KITTEN_BIRTH_PER_TICK * tps,
+            catnipPerKittenPerSec: _CATNIP_PER_KITTEN_PER_TICK * tps,
+            growthActive:    ((rates.catnip || 0) > 0) && (kittens < (village.maxKittens || 0))
+        };
+
+        // Collect per-kitten job modifiers from the edge graph so the beam can
+        // compute delta rates when reassigning free kittens.
+        var jobMods = {};
+        if (eg && eg.nodes) {
+            var nids = Object.keys(eg.nodes);
+            for (var ni = 0; ni < nids.length; ni++) {
+                var n = eg.nodes[nids[ni]];
+                if (n.kind === 'job' && n.jobModifiers) jobMods[n.name] = n.jobModifiers;
+            }
+        }
+
         return { resources: resources, rates: rates, caps: caps,
-                 unlocks: unlocks, elapsed: 0, tps: tps };
+                 unlocks: unlocks, elapsed: 0, tps: tps,
+                 pop: pop, jobMods: jobMods };
     }
 
     function _cloneAlgState(s) {
+        var popCopy = null;
+        if (s.pop) {
+            popCopy = Object.assign({}, s.pop);
+            popCopy.assignments = Object.assign({}, s.pop.assignments);
+        }
         return {
             resources: Object.assign({}, s.resources),
             rates:     Object.assign({}, s.rates),
             caps:      Object.assign({}, s.caps),
             unlocks:   Object.assign({}, s.unlocks),
             elapsed:   s.elapsed,
-            tps:       s.tps || 5
+            tps:       s.tps || 5,
+            pop:       popCopy,
+            jobMods:   s.jobMods  // shared, immutable
         };
     }
 
@@ -896,9 +989,13 @@
     // ── Symbolic state transition ────────────────────────────────────────────
     // Apply the effect of acquiring `node` to `state`.
     // Uses node.perUnitProvides (marginal: 1 building) for production/storage/ratio.
+    // `priceOverride` (optional) lets beam pass a repeat-scaled price; when
+    // omitted, the node's standard price/unlockPrice is used.
     // Returns the new state, or null if the node's cost is unreachable.
-    function applyActionSymbolic(state, node, craftsByOutput) {
-        var cost = (node.state === 'locked-ui') ? node.unlockPrice : node.price;
+    function applyActionSymbolic(state, node, craftsByOutput, priceOverride) {
+        var cost = priceOverride !== undefined && priceOverride !== null
+                   ? priceOverride
+                   : ((node.state === 'locked-ui') ? node.unlockPrice : node.price);
         var etaResult = cost ? timeToAffordInState(state, cost, craftsByOutput) : { secs: 0 };
         if (etaResult.secs === Infinity) return null;
         var eta = etaResult.secs;
@@ -913,6 +1010,61 @@
             var cap  = next.caps[r] || 0;
             var proj = next.resources[r] + next.rates[r] * eta;
             next.resources[r] = (cap > 0) ? Math.min(proj, cap) : proj;
+        }
+
+        // 1b. Kitten growth during this interval (Euler, first-order).
+        //     Each new kitten adds future catnip drain.  Three caps:
+        //       (a) birthRate × eta        — how many could plausibly arrive
+        //       (b) maxKittens - kittens   — population cap headroom
+        //       (c) catnipRate / drain     — SUSTAINABLE headcount bump.
+        //           Without this the beam will happily spawn kittens into a
+        //           catnip-deficit state, falsely making huts look productive
+        //           even when no fields support the extra mouths.
+        if (next.pop && next.pop.growthActive) {
+            var drainPerKitten = next.pop.catnipPerKittenPerSec;
+            var bornByRate    = next.pop.birthRatePerSec * eta;
+            var bornByCap     = next.pop.maxKittens - next.pop.kittens;
+            var bornBySustain = drainPerKitten > 0
+                                ? Math.max(0, (next.rates.catnip || 0) / drainPerKitten)
+                                : Infinity;
+            var born = Math.max(0, Math.min(bornByRate, bornByCap, bornBySustain));
+            if (born > 0) {
+                next.pop.kittens += born;
+                next.rates.catnip = (next.rates.catnip || 0) - born * drainPerKitten;
+
+                // Auto-assign newborn kittens proportionally to the current job
+                // distribution — mirrors what doAutoJobs will do in reality, so
+                // the beam can see population growth translate into rate growth.
+                // When no jobs are assigned yet, kittens stay free (no signal).
+                var totalAssigned = 0;
+                for (var jn in next.pop.assignments) {
+                    if (next.pop.assignments.hasOwnProperty(jn))
+                        totalAssigned += next.pop.assignments[jn] || 0;
+                }
+                if (totalAssigned > 0 && next.jobMods) {
+                    for (var jn2 in next.pop.assignments) {
+                        if (!next.pop.assignments.hasOwnProperty(jn2)) continue;
+                        var curCount = next.pop.assignments[jn2] || 0;
+                        if (curCount <= 0) continue;
+                        var share    = curCount / totalAssigned;
+                        var assigned = born * share;
+                        var mods2    = next.jobMods[jn2];
+                        if (mods2) {
+                            for (var res2 in mods2) {
+                                if (!mods2.hasOwnProperty(res2)) continue;
+                                next.rates[res2] = (next.rates[res2] || 0)
+                                                 + mods2[res2] * assigned * tps;
+                            }
+                        }
+                        next.pop.assignments[jn2] = curCount + assigned;
+                    }
+                } else {
+                    next.pop.free += born;
+                }
+
+                next.pop.growthActive = (next.rates.catnip > 0)
+                                      && (next.pop.kittens < next.pop.maxKittens);
+            }
         }
 
         // 2. Pay cost.
@@ -933,11 +1085,17 @@
             }
         }
 
-        // 3b. Storage cap increases.
+        // 3b. Storage cap increases.  maxKittens mirrors into pop.maxKittens
+        //     so kitten growth sees the new headroom immediately.
         if (prov && prov.storage) {
             for (var i = 0; i < prov.storage.length; i++) {
                 var e = prov.storage[i];
                 next.caps[e.res] = (next.caps[e.res] || 0) + e.amount;
+                if (e.res === 'maxKittens' && next.pop) {
+                    next.pop.maxKittens += e.amount;
+                    next.pop.growthActive = ((next.rates.catnip || 0) > 0)
+                                          && (next.pop.kittens < next.pop.maxKittens);
+                }
             }
         }
 
@@ -948,6 +1106,23 @@
                 if (e.kind === 'ratio') {
                     next.rates[e.res] = (next.rates[e.res] || 0) * (1 + e.amount);
                 }
+            }
+        }
+
+        // 3d. Job reassignment: move ALL currently-free kittens to this job,
+        //     delta-add their per-kitten rates.  Matches doAutoJobs semantics
+        //     closely enough for ranking.  Existing rates[] reflects current
+        //     assignments via perTickCached, so we only add the delta.
+        if (node.kind === 'job' && next.pop && next.jobMods) {
+            var mods = next.jobMods[node.name];
+            var freeK = next.pop.free || 0;
+            if (mods && freeK > 0) {
+                for (var jr in mods) {
+                    if (!mods.hasOwnProperty(jr)) continue;
+                    next.rates[jr] = (next.rates[jr] || 0) + mods[jr] * freeK * tps;
+                }
+                next.pop.assignments[node.name] = (next.pop.assignments[node.name] || 0) + freeK;
+                next.pop.free = 0;
             }
         }
 
@@ -981,6 +1156,21 @@
             return timeToAffordInState(s, prices, idx);
         };
 
+        // window.__kittensIn(state?) — show pop block of a symbolic state.
+        window.__kittensIn = function (state) {
+            var s = state || window.__snapshotAlgebraicState();
+            if (!s || !s.pop) return '(no pop)';
+            var p = s.pop;
+            return {
+                kittens: p.kittens.toFixed(2) + '/' + p.maxKittens,
+                free: p.free.toFixed(2),
+                assignments: p.assignments,
+                birthPerSec: p.birthRatePerSec,
+                growthActive: p.growthActive,
+                catnipRate: (s.rates.catnip || 0).toFixed(3) + '/s'
+            };
+        };
+
         // window.__applySymbolic('bld:field')
         window.__applySymbolic = function (nodeId) {
             var eg = (typeof getCachedEdgeGraph === 'function') ? getCachedEdgeGraph(gamePage) : null;
@@ -993,6 +1183,541 @@
             var next   = applyActionSymbolic(state, node, idx);
             if (!next) console.warn('[__applySymbolic] unreachable (Infinity ETA) for', nodeId);
             return next;
+        };
+    }
+
+    // =========================================================================
+    //  [SSP-D] VALUE ITERATION OVER TERMINAL-GOAL CANDIDATES
+    //
+    //  Phase 1 of the SSP-Dynamic plan.  Pure, dependency-injected — does not
+    //  touch `gamePage`, `window`, or any sibling-file global.  Tests in
+    //  tests/ssp_value.test.js drive it with a synthetic edge graph.
+    //
+    //  Inputs:
+    //    eg       — edge graph from 06_edges.js  (nodes, unlockedBy)
+    //    algState — symbolic state from 04c_symbolic.js (snapshotAlgebraicState)
+    //    deps     — { applyActionSymbolic, timeToAffordInState, craftsByOutput,
+    //                 getBias?:(goalId)->number, rewardWeight?:number }
+    //    opts     — { candidates?:string[], horizon?:number, terminalKinds?:string[] }
+    //
+    //  Output:
+    //    {
+    //      V:        { [goalId]: secondsToReach },
+    //      fanout:   { [goalId]: descendantCount },
+    //      ranking:  [{ id, V, fanout, score, reachable }]   (ascending score)
+    //    }
+    //
+    //  Score = bias(g) · V(g) − rewardWeight · (1 + fanout(g)).  Lower is
+    //  better.  rewardWeight is in seconds-per-unlock and defaults to 1 — a
+    //  conservative trade that prefers gateway nodes only when their time
+    //  cost is comparable to the leaves they outweigh.
+    // =========================================================================
+
+    var SSP_TERMINAL_KINDS_DEFAULT = {
+        tech: true, ws_upg: true,
+        rel_upg_ru: true, rel_upg_zu: true, rel_upg_tu: true,
+        mission: true, space_bld: true
+    };
+    var SSP_DEFAULT_HORIZON     = 8;
+    var SSP_DEFAULT_REWARD_W    = 1.0;
+    var SSP_DEFAULT_BIAS        = function () { return 1.0; };
+    var SSP_INFINITY            = Infinity;
+
+    // ── Fanout: |transitive descendants via provides.unlocks| ────────────────
+    // Cycle-safe DFS with memoization.  Returns the *count* of distinct
+    // descendant ids (not including g itself).
+    function _sspComputeFanout(eg) {
+        var memo = {};
+        var stack = {};
+        function dfs(id) {
+            if (memo[id]) return memo[id];
+            if (stack[id]) return { set: {}, count: 0 };  // cycle stub
+            stack[id] = true;
+            var node = eg.nodes[id];
+            var set = {};
+            if (node && node.provides && node.provides.unlocks) {
+                var ul = node.provides.unlocks;
+                for (var i = 0; i < ul.length; i++) {
+                    var child = ul[i];
+                    if (set[child]) continue;
+                    set[child] = true;
+                    var sub = dfs(child);
+                    for (var k in sub.set) set[k] = true;
+                }
+            }
+            stack[id] = false;
+            var count = 0;
+            for (var k2 in set) count++;
+            memo[id] = { set: set, count: count };
+            return memo[id];
+        }
+        var out = {};
+        for (var id in eg.nodes) out[id] = dfs(id).count;
+        return out;
+    }
+
+    // ── Edge time: cost to acquire a single node from a given symbolic state ─
+    // Returns { secs, nextState } or { secs: Infinity, nextState: null }.
+    function _sspEdgeTime(node, state, deps) {
+        if (!node) return { secs: SSP_INFINITY, nextState: null };
+        if (state.unlocks && state.unlocks[node.id]) return { secs: 0, nextState: state };
+        if (node.state === 'done') return { secs: 0, nextState: state };
+        // locked-prereq cannot be paid for directly — caller must walk
+        // unlockedBy first.  Returning Infinity here forces _sspCost into the
+        // recursive branch instead of treating the price as immediately
+        // payable.
+        if (node.state === 'locked-prereq') return { secs: SSP_INFINITY, nextState: null };
+
+        var price = (node.state === 'locked-ui') ? node.unlockPrice : node.price;
+        var eta = price
+            ? deps.timeToAffordInState(state, price, deps.craftsByOutput)
+            : { secs: 0 };
+        if (eta.secs === SSP_INFINITY) return { secs: SSP_INFINITY, nextState: null };
+
+        var next = deps.applyActionSymbolic
+            ? deps.applyActionSymbolic(state, node, deps.craftsByOutput)
+            : null;
+        if (!next) return { secs: eta.secs, nextState: state };
+        return { secs: eta.secs, nextState: next };
+    }
+
+    // ── Bellman cost: V(g | s) = min over OR-branches of {time(prereq)+time(g)} ─
+    // For ready / locked-cost / locked-ui nodes, edge time is the closed-form
+    // ETA from `state`.  For locked-prereq nodes, recurse into eg.unlockedBy
+    // and accumulate.  `seen` guards cycles.
+    function _sspCost(goalId, state, eg, deps, depth, seen) {
+        if (depth <= 0) return SSP_INFINITY;
+        if (seen[goalId]) return SSP_INFINITY;
+
+        var node = eg.nodes[goalId];
+        if (!node) return SSP_INFINITY;
+        if (node.state === 'done' || (state.unlocks && state.unlocks[goalId])) return 0;
+
+        if (node.state === 'ready' || node.state === 'locked-cost' || node.state === 'locked-ui') {
+            return _sspEdgeTime(node, state, deps).secs;
+        }
+
+        // locked-prereq: take min over OR-options of {cost(opt) + price(goal | after opt)}.
+        // After the prereq is satisfied, the goal becomes "virtually ready" — bill
+        // its raw price against the post-prereq state directly (do NOT route
+        // through _sspEdgeTime, which still sees node.state==='locked-prereq').
+        var sources = eg.unlockedBy ? (eg.unlockedBy[goalId] || []) : [];
+        if (sources.length === 0) return SSP_INFINITY;
+
+        var nextSeen = Object.assign({}, seen); nextSeen[goalId] = true;
+        var goalPrice = (node.state === 'locked-ui') ? node.unlockPrice : node.price;
+
+        var best = SSP_INFINITY;
+        for (var i = 0; i < sources.length; i++) {
+            var srcId = sources[i].id;
+            var srcNode = eg.nodes[srcId];
+            if (!srcNode) continue;
+
+            var preCost, afterPre;
+            var preEdge = _sspEdgeTime(srcNode, state, deps);
+            if (preEdge.secs === SSP_INFINITY) {
+                // Source also gated — recurse.  We don't have a post-state from
+                // a chain of recursive calls; fall back to the current state as
+                // a lower bound for goal pricing.
+                preCost = _sspCost(srcId, state, eg, deps, depth - 1, nextSeen);
+                if (preCost === SSP_INFINITY) continue;
+                afterPre = state;
+            } else {
+                preCost = preEdge.secs;
+                afterPre = preEdge.nextState || state;
+            }
+
+            var goalSecs = 0;
+            if (goalPrice && goalPrice.length > 0) {
+                var eta = deps.timeToAffordInState(afterPre, goalPrice, deps.craftsByOutput);
+                if (!eta || eta.secs === SSP_INFINITY) continue;
+                goalSecs = eta.secs;
+            }
+            var total = preCost + goalSecs;
+            if (total < best) best = total;
+        }
+        return best;
+    }
+
+    // ── Public entry ─────────────────────────────────────────────────────────
+    function computeSspValueTable(eg, algState, deps, opts) {
+        deps = deps || {};
+        opts = opts || {};
+        var horizon       = opts.horizon       || SSP_DEFAULT_HORIZON;
+        var terminalKinds = opts.terminalKinds || SSP_TERMINAL_KINDS_DEFAULT;
+        var rewardWeight  = (deps.rewardWeight != null) ? deps.rewardWeight : SSP_DEFAULT_REWARD_W;
+        var getBias       = deps.getBias || SSP_DEFAULT_BIAS;
+
+        var fanout = _sspComputeFanout(eg);
+
+        var candidates = opts.candidates;
+        if (!candidates) {
+            candidates = [];
+            for (var id in eg.nodes) {
+                var n = eg.nodes[id];
+                if (!terminalKinds[n.kind]) continue;
+                if (n.state === 'done') continue;
+                candidates.push(id);
+            }
+        }
+
+        var V = {};
+        var ranking = [];
+        for (var i = 0; i < candidates.length; i++) {
+            var gid  = candidates[i];
+            var raw  = _sspCost(gid, algState, eg, deps, horizon, {});
+            // Bias contract matches 04f: only finite, strictly-positive values
+            // are honoured; everything else (0, NaN, null, undefined, negatives)
+            // is rejected and we fall back to 1.0.  Treating 0 as "free" would
+            // hide bugs in the belief table.
+            var biasRaw = getBias(gid);
+            var bias = (typeof biasRaw === 'number' && isFinite(biasRaw) && biasRaw > 0)
+                ? biasRaw : 1.0;
+            var biased = (raw === SSP_INFINITY) ? SSP_INFINITY : raw * bias;
+            V[gid] = biased;
+            var fan = fanout[gid] || 0;
+            var score = (biased === SSP_INFINITY)
+                ? SSP_INFINITY
+                : biased - rewardWeight * (1 + fan);
+            ranking.push({
+                id: gid, V: biased, fanout: fan,
+                score: score, reachable: biased !== SSP_INFINITY
+            });
+        }
+        ranking.sort(function (a, b) { return a.score - b.score; });
+
+        return { V: V, fanout: fanout, ranking: ranking };
+    }
+
+    // ── Dual-mode export (Node tests / browser userscript) ───────────────────
+    if (typeof module !== 'undefined' && module.exports) {
+        module.exports = {
+            computeSspValueTable: computeSspValueTable,
+            _sspComputeFanout: _sspComputeFanout,
+            _sspEdgeTime: _sspEdgeTime,
+            _sspCost: _sspCost,
+            SSP_TERMINAL_KINDS_DEFAULT: SSP_TERMINAL_KINDS_DEFAULT
+        };
+    }
+
+    // =========================================================================
+    //  [SSP-D] BELIEF TABLE  (Phase 1: cold-start stub)
+    //
+    //  Per-goal multiplicative bias on predicted edge times:
+    //      time_actual ≈ b[g] · time_predicted
+    //
+    //  Phase 1 — getBias() always returns 1.0 (cold start; trust the registry).
+    //  Phase 3 will wire recordObservation() into the orchestrator's completion
+    //  callback to maintain an EWMA-updated bias persisted in localStorage.
+    //  The API is set in stone now so callers don't change between phases.
+    // =========================================================================
+
+    var SSP_BELIEF_KEY    = 'mctsAuto_sspBelief';
+    var SSP_BELIEF_ALPHA  = 0.2;
+    var SSP_BELIEF_CLIP   = [0.25, 4.0];
+    // Confidence weighting: getSspBias returns a blend of the raw EWMA bias
+    // and the cold-start prior (1.0), tilting toward the prior until enough
+    // observations have accumulated.
+    //   effective = (WARMUP_N * 1.0 + count * raw) / (WARMUP_N + count)
+    // With WARMUP_N=5: 0 obs → 1.0, 5 obs → halfway, 20 obs ≈ raw.
+    var SSP_BELIEF_WARMUP = 5;
+
+    var _sspBeliefStore = null;   // injected for tests; null → use localStorage
+    var _sspBeliefCache = null;
+
+    function _sspBeliefStorage() {
+        if (_sspBeliefStore) return _sspBeliefStore;
+        if (typeof localStorage !== 'undefined') return localStorage;
+        return null;
+    }
+
+    function _sspBeliefLoad() {
+        if (_sspBeliefCache) return _sspBeliefCache;
+        var s = _sspBeliefStorage();
+        if (!s) { _sspBeliefCache = {}; return _sspBeliefCache; }
+        try {
+            var raw = s.getItem(SSP_BELIEF_KEY);
+            _sspBeliefCache = raw ? (JSON.parse(raw) || {}) : {};
+        } catch (e) { _sspBeliefCache = {}; }
+        return _sspBeliefCache;
+    }
+
+    function _sspBeliefPersist() {
+        var s = _sspBeliefStorage();
+        if (!s || !_sspBeliefCache) return;
+        try { s.setItem(SSP_BELIEF_KEY, JSON.stringify(_sspBeliefCache)); } catch (e) { }
+    }
+
+    // Normalises a stored entry (legacy numeric or new {bias,count}) into
+    // the canonical {bias, count} shape.  Returns null for invalid values
+    // so the caller can default to {bias:1, count:0}.
+    function _sspBeliefRead(goalId) {
+        var t = _sspBeliefLoad();
+        var v = t[goalId];
+        if (typeof v === 'number' && isFinite(v) && v > 0) {
+            // Legacy: treat a single persisted bias as 1 sample.
+            return { bias: v, count: 1 };
+        }
+        if (v && typeof v === 'object'
+            && typeof v.bias === 'number' && isFinite(v.bias) && v.bias > 0
+            && typeof v.count === 'number' && v.count >= 0) {
+            return { bias: v.bias, count: v.count };
+        }
+        return null;
+    }
+
+    function _sspEffectiveBias(rec) {
+        if (!rec) return 1.0;
+        var n = rec.count, w = SSP_BELIEF_WARMUP;
+        return (w * 1.0 + n * rec.bias) / (w + n);
+    }
+
+    function getSspBias(goalId) {
+        if (!goalId) return 1.0;
+        return _sspEffectiveBias(_sspBeliefRead(goalId));
+    }
+
+    // Returns {bias, count, effective} for debug/UI surfaces.  Always returns
+    // an object — cold-start goals get {bias:1, count:0, effective:1}.
+    function getSspBeliefRecord(goalId) {
+        var rec = _sspBeliefRead(goalId) || { bias: 1.0, count: 0 };
+        return { bias: rec.bias, count: rec.count, effective: _sspEffectiveBias(rec) };
+    }
+
+    // Records a (predicted, actual) pair: updates EWMA bias and increments
+    // sample count.  Bias is the long-run estimate; count drives confidence.
+    function recordSspObservation(goalId, predictedSecs, actualSecs) {
+        if (!goalId || !isFinite(predictedSecs) || !isFinite(actualSecs)) return;
+        if (predictedSecs <= 0 || actualSecs <= 0) return;
+        var ratio = actualSecs / predictedSecs;
+        if (ratio < SSP_BELIEF_CLIP[0]) ratio = SSP_BELIEF_CLIP[0];
+        if (ratio > SSP_BELIEF_CLIP[1]) ratio = SSP_BELIEF_CLIP[1];
+        var t = _sspBeliefLoad();
+        var rec = _sspBeliefRead(goalId);
+        var priorBias  = rec ? rec.bias  : 1.0;
+        var priorCount = rec ? rec.count : 0;
+        t[goalId] = {
+            bias:  SSP_BELIEF_ALPHA * ratio + (1 - SSP_BELIEF_ALPHA) * priorBias,
+            count: priorCount + 1
+        };
+        _sspBeliefPersist();
+    }
+
+    function resetSspBelief() {
+        _sspBeliefCache = {};
+        _sspBeliefPersist();
+    }
+
+    // Test injection: pass a Map-backed object with getItem/setItem/removeItem.
+    function _setSspBeliefStorage(impl) {
+        _sspBeliefStore = impl || null;
+        _sspBeliefCache = null;
+    }
+
+    if (typeof module !== 'undefined' && module.exports) {
+        module.exports = {
+            getSspBias: getSspBias,
+            getSspBeliefRecord: getSspBeliefRecord,
+            recordSspObservation: recordSspObservation,
+            resetSspBelief: resetSspBelief,
+            _setSspBeliefStorage: _setSspBeliefStorage,
+            SSP_BELIEF_ALPHA: SSP_BELIEF_ALPHA,
+            SSP_BELIEF_CLIP: SSP_BELIEF_CLIP,
+            SSP_BELIEF_KEY: SSP_BELIEF_KEY,
+            SSP_BELIEF_WARMUP: SSP_BELIEF_WARMUP
+        };
+    }
+
+    // =========================================================================
+    //  [SSP-D] POLICY GLUE  (Phase 1: shadow mode)
+    //
+    //  Wires computeSspValueTable() to live game state via the existing
+    //  04c_symbolic snapshot.  Phase 1 NEVER changes behaviour — it only
+    //  produces a ranking that the orchestrator logs alongside the user's
+    //  cfg.terminalGoal.  The console hook window.__sspDebug() lets you
+    //  inspect what SSP would pick on demand.
+    // =========================================================================
+
+    var _sspShadowLog       = [];   // [{ts, userGoal, sspTop, agree, top3}]
+    var SSP_SHADOW_LOG_MAX  = 200;
+
+    function _sspBuildDeps(eg) {
+        var craftsByOutput = {};
+        try {
+            if (typeof _indexCraftsByOutput === 'function') {
+                var scrape = (eg && eg.__scrape) ? eg.__scrape
+                    : (typeof scrapeGraph === 'function' ? scrapeGraph(gamePage) : null);
+                if (scrape) craftsByOutput = _indexCraftsByOutput(scrape, gamePage) || {};
+            }
+        } catch (e) { }
+        return {
+            applyActionSymbolic: (typeof applyActionSymbolic === 'function')
+                ? applyActionSymbolic : null,
+            timeToAffordInState: (typeof timeToAffordInState === 'function')
+                ? timeToAffordInState : null,
+            craftsByOutput: craftsByOutput,
+            getBias: getSspBias,
+            rewardWeight: 1.0
+        };
+    }
+
+    // Run one shadow ranking pass.  Safe to call any time; returns null if
+    // the prerequisites aren't loaded yet (game still booting).
+    function pickTerminalGoalSSP(game, eg) {
+        if (!eg || !eg.nodes) return null;
+        if (typeof snapshotAlgebraicState !== 'function') return null;
+        if (typeof timeToAffordInState !== 'function') return null;
+
+        var algState;
+        try { algState = snapshotAlgebraicState(game, eg); }
+        catch (e) { return null; }
+
+        var deps = _sspBuildDeps(eg);
+        if (!deps.timeToAffordInState) return null;
+
+        var result;
+        try { result = computeSspValueTable(eg, algState, deps); }
+        catch (e) { console.warn('[SSP] valueTable failed', e); return null; }
+
+        return result;
+    }
+
+    function _sspShadowTick(game, eg, userGoal) {
+        if (typeof cfg === 'undefined' || !cfg.sspShadow) return;
+        var startMs = Date.now();
+        var result  = pickTerminalGoalSSP(game, eg);
+        var elapsed = Date.now() - startMs;
+        if (!result) return;
+
+        var top3 = result.ranking.slice(0, 3).map(function (r) {
+            return {
+                id: r.id,
+                V: isFinite(r.V) ? +r.V.toFixed(1) : null,
+                fanout: r.fanout,
+                score: isFinite(r.score) ? +r.score.toFixed(1) : null
+            };
+        });
+        var sspTop = top3.length > 0 ? top3[0].id : null;
+        var entry = {
+            ts: Date.now(),
+            elapsedMs: elapsed,
+            userGoal: userGoal || null,
+            sspTop: sspTop,
+            agree: !!(userGoal && sspTop && userGoal === sspTop),
+            top3: top3,
+            reachable: result.ranking.filter(function (r) { return r.reachable; }).length,
+            total: result.ranking.length
+        };
+        _sspShadowLog.unshift(entry);
+        if (_sspShadowLog.length > SSP_SHADOW_LOG_MAX) _sspShadowLog.pop();
+
+        if (elapsed > 50) {
+            console.log('[SSP] shadow tick took ' + elapsed + 'ms ('
+                + entry.reachable + '/' + entry.total + ' reachable)');
+        }
+    }
+
+    function _sspAgreementStats() {
+        var n = _sspShadowLog.length;
+        if (n === 0) return { samples: 0, agreeRate: null };
+        var agree = 0, withUser = 0;
+        for (var i = 0; i < n; i++) {
+            if (_sspShadowLog[i].userGoal) {
+                withUser++;
+                if (_sspShadowLog[i].agree) agree++;
+            }
+        }
+        return {
+            samples: n,
+            withUserGoal: withUser,
+            agreeRate: withUser > 0 ? +(agree / withUser).toFixed(3) : null
+        };
+    }
+
+    // ── Phase 4: feedback loop ────────────────────────────────────────────────
+    // Tracks the current SSP-picked goal so that when it transitions to 'done'
+    // we can compare predicted vs actual elapsed time and feed the ratio into
+    // recordSspObservation().  Single-slot tracking — if SSP shifts to a new
+    // pick before the old one completes, we abandon the in-flight observation.
+    // In-memory only; a page reload loses any in-flight tracking.
+    var _sspObservation = null;  // { goalId, predictedSecs, startedAtMs }
+
+    function _sspFeedbackTick(eg, sspPickedGoal, predictedSecs) {
+        try {
+            // (1) Did the goal we were tracking just complete?  Record + clear.
+            if (_sspObservation && eg && eg.nodes
+                && eg.nodes[_sspObservation.goalId]
+                && eg.nodes[_sspObservation.goalId].state === 'done') {
+                var elapsedSecs = (Date.now() - _sspObservation.startedAtMs) / 1000;
+                if (elapsedSecs > 0 && typeof recordSspObservation === 'function') {
+                    recordSspObservation(_sspObservation.goalId,
+                        _sspObservation.predictedSecs, elapsedSecs);
+                }
+                _sspObservation = null;
+            }
+
+            // (2) Start tracking the current pick (or switch tracking if SSP
+            // changed its mind — the prior in-flight observation is dropped).
+            // Skip nodes that are already 'done' — recording would be a no-op
+            // and we'd just keep re-tracking a completed goal forever.
+            var pickedNode = (eg && eg.nodes) ? eg.nodes[sspPickedGoal] : null;
+            var pickedDone = pickedNode && pickedNode.state === 'done';
+            if (sspPickedGoal && !pickedDone && typeof predictedSecs === 'number'
+                && isFinite(predictedSecs) && predictedSecs > 0) {
+                if (!_sspObservation || _sspObservation.goalId !== sspPickedGoal) {
+                    _sspObservation = {
+                        goalId: sspPickedGoal,
+                        predictedSecs: predictedSecs,
+                        startedAtMs: Date.now()
+                    };
+                }
+            } else if (!sspPickedGoal) {
+                // SSP didn't pick anything this cycle — abandon tracking.
+                _sspObservation = null;
+            }
+        } catch (e) { console.warn('[SSP] feedback tick failed', e); }
+    }
+
+    function _sspAbandonObservation() { _sspObservation = null; }
+    function _sspPendingObservation() { return _sspObservation; }
+
+    // ── Console hooks ────────────────────────────────────────────────────────
+    if (typeof window !== 'undefined') {
+        window.__sspDebug = function () {
+            var eg = (typeof getCachedEdgeGraph === 'function')
+                ? getCachedEdgeGraph(gamePage) : null;
+            if (!eg) { console.warn('[SSP] no edge graph yet'); return null; }
+            var result = pickTerminalGoalSSP(gamePage, eg);
+            if (!result) { console.warn('[SSP] could not compute'); return null; }
+            console.log('[SSP] terminal-goal ranking (top 10):');
+            console.table(result.ranking.slice(0, 10).map(function (r) {
+                return {
+                    id: r.id,
+                    V_secs: isFinite(r.V) ? +r.V.toFixed(1) : '∞',
+                    fanout: r.fanout,
+                    score: isFinite(r.score) ? +r.score.toFixed(1) : '∞'
+                };
+            }));
+            return result;
+        };
+
+        window.__sspShadowLog  = function () { return _sspShadowLog; };
+        window.__sspAgreement = _sspAgreementStats;
+        window.__sspBeliefDump = function () {
+            var t = _sspBeliefLoad();
+            console.table(t);
+            return t;
+        };
+    }
+
+    if (typeof module !== 'undefined' && module.exports) {
+        module.exports = {
+            pickTerminalGoalSSP: pickTerminalGoalSSP,
+            _sspShadowTick: _sspShadowTick,
+            _sspAgreementStats: _sspAgreementStats,
+            _sspFeedbackTick: _sspFeedbackTick,
+            _sspAbandonObservation: _sspAbandonObservation,
+            _sspPendingObservation: _sspPendingObservation
         };
     }
 
@@ -1428,6 +2153,10 @@
             if (k.length > suf.length && k.slice(-suf.length) === suf) {
                 return { res: k.slice(0, -suf.length), kind: "prod" };
             }
+        }
+        // Kitten cap is keyed "maxKittens" (prefix, not suffix) — special-case it.
+        if (k === "maxKittens") {
+            return { res: "maxKittens", kind: "storage" };
         }
         if (k.length > 3 && k.slice(-3) === "Max") {
             return { res: k.slice(0, -3), kind: "storage" };
@@ -2146,6 +2875,7 @@
             val: b.val, on: b.on,
             prereqs: [],           // filled in after inverse-unlock pass
             price: b.prices,
+            priceRatio: b.priceRatio || 1.15,  // used by beam repeat-cost scaling
             unlockPrice: _unlockPriceFromScraped(b),
             provides: {
                 resources: prov.resources, storage: prov.storage,
@@ -2207,6 +2937,17 @@
     }
 
     function _jobNode(j) {
+        // jobModifiers is per-kitten-per-tick.  Symbolic state multiplies by
+        // (assigned count × tps) when a job action is applied.  We deliberately
+        // leave provides.resources EMPTY so the flat-add path in
+        // applyActionSymbolic doesn't count a job reassignment as one-kitten
+        // worth of rate.
+        var mods = {};
+        if (j.modifiers) {
+            for (var k in j.modifiers) {
+                if (j.modifiers.hasOwnProperty(k) && j.modifiers[k]) mods[k] = j.modifiers[k];
+            }
+        }
         return {
             id: _id("job", j.name),
             kind: "job",
@@ -2214,21 +2955,13 @@
             state: j.unlocked ? "ready" : "locked-prereq",
             prereqs: [],
             price: null, unlockPrice: null,
+            jobModifiers: mods,
             provides: {
-                resources: _modsToProvides(j.modifiers),
+                resources: [],
                 storage: [], ratios: [], con: [], unlocks: []
             },
             rawUnlocks: null
         };
-    }
-    function _modsToProvides(mods) {
-        var out = [];
-        for (var k in mods) {
-            if (!mods.hasOwnProperty(k)) continue;
-            if (!mods[k]) continue;
-            out.push({ res: k, rate: mods[k], key: "jobMod" });
-        }
-        return out;
     }
 
     function _craftNode(c) {
@@ -2274,6 +3007,7 @@
             val: b.val, on: b.on,
             prereqs: [],
             price: b.prices,
+            priceRatio: b.priceRatio || 1.15,  // used by beam repeat-cost scaling
             unlockPrice: b.prices && b.prices.map(function (p) {
                 return { name: p.name, val: p.val * UI_UNLOCK_THRESHOLD };
             }),
@@ -2436,6 +3170,26 @@
                 for (var j = 0; j < srcs.length; j++) {
                     if (nodes[srcs[j]]) linkUnlock(srcs[j], [n.id], "and");
                 }
+            }
+        }
+
+        // Register jobs as producers/consumers from their jobModifiers.  Jobs
+        // intentionally keep provides.resources empty (symbolic state would
+        // miscount), but the chain-backward search needs to know which jobs
+        // produce a given resource so prod-helpers can surface housing /
+        // unlocker chains (e.g. wood is produced by job:woodcutter, which
+        // requires kittens from bld:hut).  jobModifiers keys are bare resource
+        // names ("wood": 0.018), not effect keys, so we don't go through
+        // _parseEffectKey here.
+        for (var i = 0; i < ids.length; i++) {
+            var n = nodes[ids[i]];
+            if (n.kind !== "job" || !n.jobModifiers) continue;
+            for (var resName in n.jobModifiers) {
+                if (!n.jobModifiers.hasOwnProperty(resName)) continue;
+                var rate = n.jobModifiers[resName];
+                if (!rate || rate <= 0) continue;
+                var bucket = (producersOf[resName] = producersOf[resName] || []);
+                if (bucket.indexOf(n.id) < 0) bucket.push(n.id);
             }
         }
 
@@ -2662,14 +3416,28 @@
                     scaled.push({ name: recipe.inputs[k].name, val: recipe.inputs[k].val * batches });
                 }
                 _gatherProdHelpers(game, eg, scaled, helpers, seen);
-            } else if ((r.perTickCached || 0) <= 0) {
-                var producers = (eg.producersOf && eg.producersOf[p.name]) || [];
-                for (var pi2 = 0; pi2 < producers.length; pi2++) {
-                    var pid = producers[pi2];
-                    var pNode = eg.nodes[pid];
-                    if (pNode && pNode.state !== "done"
-                        && helpers.indexOf(pid) < 0) {
-                        helpers.push(pid);
+            } else {
+                // No craft path. Surface producers when rate is non-positive
+                // OR when the rate is too low to satisfy this cost in a
+                // reasonable horizon — otherwise the chain declares a
+                // marginal +0.1/s "solved" and never plans more producers,
+                // which is what stalls early-game catnip when one farmer
+                // barely covers one kitten's consumption.
+                var rate = r.perTickCached || 0;
+                var tps = (game && game.ticksPerSecond) || 5;
+                var deficit = p.val - (r.value || 0);
+                var secsToAfford = (rate > 0) ? (deficit / (rate * tps)) : Infinity;
+                var horizonSecs = (cfg && typeof cfg.prodHelperHorizonSecs === 'number')
+                    ? cfg.prodHelperHorizonSecs : 600;   // 10 min default
+                if (rate <= 0 || secsToAfford > horizonSecs) {
+                    var producers = (eg.producersOf && eg.producersOf[p.name]) || [];
+                    for (var pi2 = 0; pi2 < producers.length; pi2++) {
+                        var pid = producers[pi2];
+                        var pNode = eg.nodes[pid];
+                        if (pNode && pNode.state !== "done"
+                            && helpers.indexOf(pid) < 0) {
+                            helpers.push(pid);
+                        }
                     }
                 }
             }
@@ -2682,6 +3450,38 @@
         return e;
     }
 
+    // Effective fanout = count of this node's unlock targets that aren't
+    // already satisfied.  Done targets add no planning value.
+    function _effectiveFanout(eg, id) {
+        if (!eg || !eg.nodes) return 0;
+        var n = eg.nodes[id];
+        if (!n || !n.provides || !n.provides.unlocks) return 0;
+        var unlocks = n.provides.unlocks;
+        var c = 0;
+        for (var i = 0; i < unlocks.length; i++) {
+            var t = eg.nodes[unlocks[i]];
+            if (t && t.state !== "done") c++;
+        }
+        return c;
+    }
+
+    // Discount a leaf-count by the option's fanout so gateways outrank leaves.
+    // Floor prevents a single gateway from becoming indistinguishably free,
+    // but must be small enough that deep chains don't saturate — at depth N
+    // with fanout f each, compounded discount is (1+f)^-N, which for f=5 N=7
+    // is ~1e-5.  Floor at 1e-8 lets ~12 fanout-5 levels stay distinguishable.
+    // Infinity (cycle / dead-end) passes through untouched.
+    function _fanoutScore(n, eg, id) {
+        if (n === Infinity) return Infinity;
+        var w = (typeof cfg !== "undefined" && typeof cfg.fanoutWeight === "number")
+                ? cfg.fanoutWeight : 1.0;
+        if (!w) return n;
+        var f = _effectiveFanout(eg, id);
+        if (!f) return n;
+        var discounted = n / (1 + w * f);
+        return discounted < 1e-8 ? 1e-8 : discounted;
+    }
+
     // Count actionable leaves reachable from an entry.  Walks raw
     // options/andReqs (set in first pass) rather than e.children (which is
     // still being populated during the picker loop).  Uses an in-progress
@@ -2691,7 +3491,10 @@
     // raises science cap, observatory needs astronomy, astronomy needs
     // theology).  Also returns Inf for dead-end locked-prereq nodes whose
     // unlocker edges aren't modeled in the graph (race/mission gates).
-    function _leafCount(entries, id, memo) {
+    //
+    // `eg` is the edge graph; used only for fanout-weighted OR selection
+    // (see _fanoutScore).  Passing null recovers the legacy behavior.
+    function _leafCount(entries, id, memo, eg) {
         if (memo[id] !== undefined) return memo[id];
         memo[id] = Infinity; // in-progress sentinel → cycle ⇒ Infinity
         var e = entries[id];
@@ -2703,9 +3506,16 @@
         var hasCapOrProd = (e.capLimited || e.prodLimited) && e.options && e.options.length;
         if (hasCapOrProd) {
             // Cap/prod-limited actionable leaf: MIN over synthesized helpers.
+            // Fanout discount applies only when there's genuine choice
+            // (≥2 helpers).  A forced single helper is effectively AND —
+            // discounting it would distort propagated leaf counts for no
+            // selection benefit.
             n = Infinity;
+            var multi = e.options.length >= 2;
             for (var i = 0; i < e.options.length; i++) {
-                var c = _leafCount(entries, e.options[i], memo);
+                var oid = e.options[i];
+                var raw = _leafCount(entries, oid, memo, eg);
+                var c = multi ? _fanoutScore(raw, eg, oid) : raw;
                 if (c < n) n = c;
             }
         } else if (e.state === "ready" || e.state === "locked-cost" || e.state === "locked-ui") {
@@ -2720,15 +3530,18 @@
                 n = 0;
                 if (hasAnd) {
                     for (var i = 0; i < e.andReqs.length; i++) {
-                        var c = _leafCount(entries, e.andReqs[i], memo);
+                        var c = _leafCount(entries, e.andReqs[i], memo, eg);
                         if (c === Infinity) { n = Infinity; break; }
                         n += c;
                     }
                 }
                 if (n !== Infinity && hasOr) {
                     var best = Infinity;
+                    var multiOr = e.options.length >= 2;
                     for (var j = 0; j < e.options.length; j++) {
-                        var c = _leafCount(entries, e.options[j], memo);
+                        var oid = e.options[j];
+                        var raw = _leafCount(entries, oid, memo, eg);
+                        var c = multiOr ? _fanoutScore(raw, eg, oid) : raw;
                         if (c < best) best = c;
                     }
                     if (best === Infinity) n = Infinity;
@@ -2776,7 +3589,10 @@
                         var p = cost[ci];
                         var r = game.resPool.get(p.name);
                         if (!r) continue;
-                        if (r.maxValue && p.val > r.maxValue) {
+                        // Cap-limited iff price exceeds storage. maxValue=0
+                        // means "no storage exists" — that IS cap-limited
+                        // (e.g. science cap at cold start with no library).
+                        if (p.val > r.maxValue) {
                             var raisers = (eg.capRaisersOf && eg.capRaisersOf[p.name]) || [];
                             for (var ri = 0; ri < raisers.length; ri++) {
                                 var rNode = eg.nodes[raisers[ri]];
@@ -2846,9 +3662,11 @@
             var kids = (e.andReqs || []).slice();
             if (e.options && e.options.length) {
                 var best = null, bestN = Infinity;
+                var multiPick = e.options.length >= 2;
                 for (var j = 0; j < e.options.length; j++) {
                     var oid = e.options[j];
-                    var n = _leafCount(entries, oid, leafMemo);
+                    var raw = _leafCount(entries, oid, leafMemo, eg);
+                    var n = multiPick ? _fanoutScore(raw, eg, oid) : raw;
                     if (n < bestN) { bestN = n; best = oid; }
                 }
                 e.picked = best;
@@ -3148,14 +3966,31 @@
             }
         }
 
-        // (2) Kitten-slot housing check.  maxKittens effect → new kitten worth
-        // of catnip consumption must already be covered by current margin.
-        var raisesKittens = (eff.maxKittens || 0) > 0;
-        if (raisesKittens) {
+        // (2) Kitten-slot housing check.  maxKittens effect → new kittens
+        // will spawn and each consumes ~0.85 catnip/sec.  Project current
+        // rate AT FULL OCCUPANCY of the new slots: rate must remain non-
+        // negative once every new slot is filled.  This catches the
+        // "build a hut, two kittens spawn, catnip locks at 0" stall.
+        var newSlots = eff.maxKittens || 0;
+        if (newSlots > 0) {
             var catnip = game.resPool.get("catnip");
-            var marginPerKittenPerTick = 0.85 / tps;  // ~0.85/sec per kitten
-            if (catnip && (catnip.perTickCached || 0) < marginPerKittenPerTick) {
-                return { res: "catnip", reason: "catnip margin insufficient for new kitten" };
+            // Bare per-kitten consumption is ~0.85/sec.  Knife-edge balance
+            // (margin == 0.85 × slots) means catnip stays at 0 forever —
+            // there's no surplus to pay for further catnip-priced builds, and
+            // any seasonal/scholar dip flips the rate negative.  Demand a
+            // headroom buffer so post-occupancy production exceeds bare
+            // consumption by a multiplier.
+            var perKittenPerSec = 0.85;
+            var headroom = (cfg && typeof cfg.housingHeadroom === 'number')
+                ? cfg.housingHeadroom : 1.25;   // 25% buffer over bare burn
+            var requiredPerSec = newSlots * perKittenPerSec * headroom;
+            var requiredPerTick = requiredPerSec / tps;
+            if (catnip && (catnip.perTickCached || 0) < requiredPerTick) {
+                return { res: "catnip", reason:
+                    "catnip rate " + ((catnip.perTickCached || 0) * tps).toFixed(2)
+                    + "/s insufficient for " + newSlots + " new kitten slot(s) "
+                    + "(need ≥" + requiredPerSec.toFixed(2) + "/s with "
+                    + headroom + "× headroom)" };
             }
         }
         return null;
@@ -3197,6 +4032,10 @@
             var pnode = eg.nodes[pid];
             if (!pnode) continue;
             if (pnode.state === "done") continue;
+            // Skip jobs — doAutoJobs handles assignment.  Runway redirects
+            // need a NEW production source (a building), not a kitten
+            // reshuffle that produces nothing extra.
+            if (pnode.kind === "job") continue;
             var sub = chainBackward(eg, pid);
             if (!sub) continue;
             annotateChainETA(game, scrape, sub);
@@ -3204,6 +4043,43 @@
             if (!subEntry) continue;
             var eta = (subEntry.etaSecs === undefined) ? Infinity : subEntry.etaSecs;
             if (eta < bestScore) { bestScore = eta; bestId = pid; }
+        }
+        return bestId;
+    }
+
+    // Cap-horizon guard: when an entry is cap-limited (price exceeds storage
+    // and no craft escape exists), find the cheapest cap-raiser by chain-back
+    // ETA and return its id. Returns null if no helpful raiser exists.
+    function _findCapHorizonRaiser(game, scrape, eg, entry) {
+        if (!entry || !entry.cost || !entry.cost.length) return null;
+        if (!eg.capRaisersOf) return null;
+
+        var bestId = null, bestEta = Infinity;
+        for (var i = 0; i < entry.cost.length; i++) {
+            var p = entry.cost[i];
+            var res = game.resPool && game.resPool.get(p.name);
+            if (!res) continue;
+            // Only resources whose cap is the actual blocker.
+            if (!res.maxValue || res.maxValue === 0) continue;
+            if (res.maxValue >= p.val) continue;
+
+            var raisers = eg.capRaisersOf[p.name] || [];
+            for (var j = 0; j < raisers.length; j++) {
+                var rid = (typeof raisers[j] === 'string') ? raisers[j] : raisers[j].id;
+                var rnode = eg.nodes[rid];
+                if (!rnode || rnode.state === 'done') continue;
+                if (!_isExecutableKind(rnode.kind)) continue;
+                var sub = chainBackward(eg, rid);
+                if (!sub) continue;
+                annotateChainETA(game, scrape, sub);
+                if (!sub.recommended) continue;
+                var subEntry = sub.entries[sub.recommended];
+                if (!subEntry) continue;
+                // Skip raisers that are themselves cap-limited (loop) or out of reach.
+                if (subEntry.capLimited) continue;
+                var eta = (subEntry.etaSecs === undefined) ? Infinity : subEntry.etaSecs;
+                if (eta < bestEta) { bestEta = eta; bestId = rid; }
+            }
         }
         return bestId;
     }
@@ -3260,7 +4136,8 @@
                k === 'mission' || k === 'space_bld' || k === 'embassy';
     }
 
-    // Returns { relevant: bool, reason: 'producer'|'capRaiser'|'ratioBooster'|null }.
+    // Returns { relevant: bool, reason: 'producer'|'capRaiser'|'ratioBooster'
+    //          |'populationCap'|'populationFuel'|null }.
     // Minimum-magnitude filter drops tiny ratio boosts (<3%) that waste beam slots.
     var MIN_RATIO_MAGNITUDE = 0.03;
     function _nodeGoalRelevance(node, needed, state) {
@@ -3288,6 +4165,36 @@
                 return { relevant: true, reason: 'ratioBooster' };
             }
         }
+
+        // Transitive relevance through the kitten model: if any needed resource
+        // has a per-kitten job modifier, then huts (maxKittens) and catnip
+        // producers (fields/pastures) matter — they unblock population growth,
+        // which the beam's time advance turns into more workers, which turns
+        // into more of the needed resource.
+        if (state && state.jobMods) {
+            var kittenEnables = false;
+            for (var res in needed) {
+                if (!needed.hasOwnProperty(res)) continue;
+                for (var jobName in state.jobMods) {
+                    var mod = state.jobMods[jobName][res];
+                    if (mod && mod > 0) { kittenEnables = true; break; }
+                }
+                if (kittenEnables) break;
+            }
+            if (kittenEnables) {
+                for (var i = 0; i < p.storage.length; i++) {
+                    if (p.storage[i].res === 'maxKittens' && p.storage[i].amount > 0) {
+                        return { relevant: true, reason: 'populationCap' };
+                    }
+                }
+                for (var i = 0; i < p.resources.length; i++) {
+                    if (p.resources[i].res === 'catnip' && p.resources[i].rate > 0) {
+                        return { relevant: true, reason: 'populationFuel' };
+                    }
+                }
+            }
+        }
+
         return { relevant: false };
     }
 
@@ -3309,8 +4216,10 @@
             if (!_isActionableState(n.state) || !_isExecutableKind(n.kind)) continue;
             var rel = _nodeGoalRelevance(n, needed, state);
             if (!rel.relevant) continue;
-            var pri = rel.reason === 'producer'   ? 1 :
-                      rel.reason === 'capRaiser'  ? 2 : 3;
+            var pri = rel.reason === 'producer'      ? 1 :
+                      rel.reason === 'capRaiser'     ? 2 :
+                      rel.reason === 'populationCap' ? 2 :
+                      rel.reason === 'populationFuel'? 3 : 3;
             candidates[id] = { priority: pri, reason: rel.reason };
         }
         return candidates;
@@ -3336,13 +4245,19 @@
         return scored.slice(0, maxK);
     }
 
-    // ── Beam search over frontier ordering ───────────────────────────────────
-    // Evaluates sequences of frontier actions using closed-form algebraic
-    // simulation (see 04c_symbolic.js). Picks the ordering with minimum total
-    // elapsed time.  Falls back to chain.recommended if budget exhausted.
-    function beamSearchFrontier(game, eg, frontier, craftsByOutput, opts) {
+    // ── Beam search with goal-terminal scoring ───────────────────────────────
+    // Objective: minimize wall-clock time to reach the terminal goal.
+    //   score(path) = Σ buildTime(step_i)  +  T_goal(stateAfterPath)
+    // where T_goal(s) = timeToAffordInState(s, goalPrice).  Baseline is
+    // T_goal(baseState) — time to save for the goal with zero instrumentals.
+    // Beam only overrides chain.recommended when some path beats the baseline.
+    //
+    // Repeat builds: buildings ('bld' / 'space_bld') can appear multiple times
+    // in a single path.  Cost scales by priceRatio^count per copy; rates
+    // accumulate linearly via perUnitProvides.  This is what lets the beam
+    // answer "3rd mill vs. 2nd library".
+    function beamSearchFrontier(game, eg, frontier, craftsByOutput, goalId, opts) {
         if (!frontier || frontier.length === 0) return null;
-        if (frontier.length === 1) return frontier[0];
 
         var startMs   = Date.now();
         var maxDepth  = (opts && opts.maxDepth)  || 3;
@@ -3351,16 +4266,68 @@
 
         var baseState = snapshotAlgebraicState(game, eg);
 
-        // Seed: each frontier item is a 1-step candidate.
+        // Goal price — what we're ultimately saving for.  If missing, degrade
+        // to pure cumulative-build-time minimization (legacy behavior).
+        var goalNode  = goalId ? eg.nodes[goalId] : null;
+        var goalPrice = null;
+        if (goalNode) {
+            goalPrice = (goalNode.state === 'locked-ui') ? goalNode.unlockPrice : goalNode.price;
+        }
+        function tGoal(state) {
+            if (!goalPrice) return 0;
+            var t = timeToAffordInState(state, goalPrice, craftsByOutput);
+            return t.secs;
+        }
+        // When the goal is reachable, score = cumBuild + remaining wait (seconds).
+        // When not reachable (cap too small, no producer), fall back to a
+        // graded penalty so the beam can still rank "library (+250 science
+        // cap) vs hut (+0 science cap)".  Penalty components:
+        //   • cap shortfall: (goalAmt - cap) per unit unreachable via cap
+        //   • no production: (goalAmt - have) per unit of a zero-rate resource
+        // BIG_PENALTY ensures cap-limited paths always rank above reachable
+        // ones (beam prefers "finite wait" when it's an option) but different
+        // cap-limited paths can be meaningfully compared.
+        var BIG_PENALTY = 1e7;
+        function scoreOf(state, cumBuild) {
+            if (!goalPrice) return cumBuild;
+            var remaining = tGoal(state);
+            if (remaining !== Infinity) return cumBuild + remaining;
+            var gap = 0;
+            for (var i = 0; i < goalPrice.length; i++) {
+                var p    = goalPrice[i];
+                var have = state.resources[p.name] || 0;
+                if (have >= p.val) continue;
+                var cap  = state.caps[p.name]  || 0;
+                var rate = state.rates[p.name] || 0;
+                if (cap > 0 && cap < p.val)       gap += (p.val - cap);
+                if (rate <= 0 && have < p.val)    gap += (p.val - have);
+            }
+            return cumBuild + BIG_PENALTY + gap;
+        }
+
+        // Baseline: save for the goal with zero instrumentals.
+        var baselineScore = scoreOf(baseState, 0);
+
+        // Seed: one 1-step candidate per frontier node, state already advanced
+        // past that step so depth-1 scoring sees post-action rates.
         var beam = [];
         for (var i = 0; i < frontier.length; i++) {
             var nodeId = frontier[i];
             var node   = eg.nodes[nodeId];
             if (!node) continue;
-            var price  = (node.state === 'locked-ui') ? node.unlockPrice : node.price;
-            var eta    = timeToAffordInState(baseState, price || [], craftsByOutput);
-            if (eta.secs === Infinity) continue;
-            beam.push({ firstAction: nodeId, path: [nodeId], state: baseState, totalEta: eta.secs });
+            var price0 = _scaledPriceFor(node, 0);
+            var eta0   = timeToAffordInState(baseState, price0 || [], craftsByOutput);
+            if (eta0.secs === Infinity) continue;
+            var next0  = applyActionSymbolic(baseState, node, craftsByOutput, price0);
+            if (!next0) continue;
+            beam.push({
+                firstAction: nodeId,
+                path:        [nodeId],
+                state:       next0,
+                cumBuild:    eta0.secs,
+                counts:      _seedCounts(nodeId, node),
+                score:       scoreOf(next0, eta0.secs)
+            });
         }
         _beamSort(beam);
         beam = beam.slice(0, beamWidth);
@@ -3370,29 +4337,30 @@
             var nextBeam = [];
             for (var bi = 0; bi < beam.length; bi++) {
                 if (Date.now() - startMs > budgetMs) break;
-                var cand     = beam[bi];
-                var lastId   = cand.path[cand.path.length - 1];
-                var lastNode = eg.nodes[lastId];
-                if (!lastNode) { nextBeam.push(cand); continue; }
+                var cand = beam[bi];
+                // Carry the shorter path forward — with goal-terminal scoring,
+                // a longer extension isn't automatically better.
+                nextBeam.push(cand);
 
-                var nextState = applyActionSymbolic(cand.state, lastNode, craftsByOutput);
-                if (!nextState) { nextBeam.push(cand); continue; }
-
-                var remaining = _beamRemaining(cand.path, frontier, lastNode, eg);
-                if (remaining.length === 0) { nextBeam.push(cand); continue; }
-
+                var remaining = _beamRemaining(cand.path, frontier, cand.counts, eg);
                 for (var ri = 0; ri < remaining.length; ri++) {
                     var nextId   = remaining[ri];
                     var nextNode = eg.nodes[nextId];
                     if (!nextNode) continue;
-                    var nextPrice = (nextNode.state === 'locked-ui') ? nextNode.unlockPrice : nextNode.price;
-                    var nextEta   = timeToAffordInState(nextState, nextPrice || [], craftsByOutput);
+                    var repeatCount = cand.counts[nextId] || 0;
+                    var scaledPrice = _scaledPriceFor(nextNode, repeatCount);
+                    var nextEta = timeToAffordInState(cand.state, scaledPrice || [], craftsByOutput);
                     if (nextEta.secs === Infinity) continue;
+                    var nextState = applyActionSymbolic(cand.state, nextNode, craftsByOutput, scaledPrice);
+                    if (!nextState) continue;
+                    var newCumBuild = cand.cumBuild + nextEta.secs;
                     nextBeam.push({
                         firstAction: cand.firstAction,
                         path:        cand.path.concat([nextId]),
                         state:       nextState,
-                        totalEta:    cand.totalEta + nextEta.secs
+                        cumBuild:    newCumBuild,
+                        counts:      _bumpCount(cand.counts, nextId),
+                        score:       scoreOf(nextState, newCumBuild)
                     });
                 }
             }
@@ -3403,32 +4371,71 @@
         var elapsedMs = Date.now() - startMs;
         var best = beam.length > 0 ? beam[0] : null;
         if (typeof console !== "undefined" && console.log) {
-            console.log('[Beam] depth=' + maxDepth + ' width=' + beamWidth +
-                ' took=' + elapsedMs + 'ms best=' +
-                (best ? best.firstAction + ' totalEta=' + best.totalEta.toFixed(0) + 's' : 'none'));
+            var baseStr = (baselineScore === Infinity) ? '∞' : baselineScore.toFixed(0);
+            var bestStr = best
+                ? best.firstAction + ' score=' + best.score.toFixed(0) + 's cum=' + best.cumBuild.toFixed(0) + 's path=' + best.path.join('→')
+                : 'none';
+            console.log('[Beam] d=' + maxDepth + ' w=' + beamWidth +
+                ' ' + elapsedMs + 'ms baseline=' + baseStr + 's best=' + bestStr);
         }
-        return best ? best.firstAction : null;
+        // Only override chain.recommended if some path genuinely beats
+        // save-for-goal.  Otherwise the caller uses its own fallback.
+        if (!best || best.score >= baselineScore) return null;
+        return best.firstAction;
     }
 
     function _beamSort(beam) {
-        beam.sort(function (a, b) { return a.totalEta - b.totalEta; });
+        beam.sort(function (a, b) { return a.score - b.score; });
     }
 
-    // Remaining candidates: original set minus those already in path.
-    // NOTE: we deliberately do NOT fold in appliedNode.provides.unlocks —
-    // doing so asymmetrically deepens branches whose last action unlocks
-    // new nodes, inflating their totalEta vs. branches that exhaust earlier.
-    // Apples-to-apples requires a fixed candidate pool across all paths.
-    function _beamRemaining(path, frontier, appliedNode, eg) {
-        var out = [];
-        for (var i = 0; i < frontier.length; i++) {
-            if (path.indexOf(frontier[i]) < 0) out.push(frontier[i]);
+    // Scale a node's price for repeat builds: 2nd copy = base × ratio^1, etc.
+    // Only buildings scale; everything else returns its nominal price.
+    function _scaledPriceFor(node, repeatCount) {
+        var price = (node.state === 'locked-ui') ? node.unlockPrice : node.price;
+        if (!price || !repeatCount) return price;
+        if (node.kind !== 'bld' && node.kind !== 'space_bld') return price;
+        var ratio = node.priceRatio || 1.15;
+        var mult  = Math.pow(ratio, repeatCount);
+        var out = new Array(price.length);
+        for (var i = 0; i < price.length; i++) {
+            out[i] = { name: price[i].name, val: price[i].val * mult };
         }
         return out;
     }
 
-    function planNextAction(game, eg) {
-        var goalId = (typeof getTerminalGoal === "function") ? getTerminalGoal() : null;
+    function _seedCounts(nodeId, node) {
+        var out = {};
+        if (node && (node.kind === 'bld' || node.kind === 'space_bld')) out[nodeId] = 1;
+        return out;
+    }
+
+    function _bumpCount(counts, nodeId) {
+        var out = {};
+        for (var k in counts) if (counts.hasOwnProperty(k)) out[k] = counts[k];
+        out[nodeId] = (out[nodeId] || 0) + 1;
+        return out;
+    }
+
+    // Remaining candidates.  Non-building nodes are consumed once per path
+    // (can't "research calendar twice").  Incremental buildings stay in the
+    // pool so the beam can represent "3rd mill vs. 2nd library".
+    function _beamRemaining(path, frontier, counts, eg) {
+        var out = [];
+        for (var i = 0; i < frontier.length; i++) {
+            var id = frontier[i];
+            var node = eg.nodes[id];
+            if (node && (node.kind === 'bld' || node.kind === 'space_bld')) {
+                out.push(id);
+            } else if (path.indexOf(id) < 0) {
+                out.push(id);
+            }
+        }
+        return out;
+    }
+
+    function planNextAction(game, eg, opts) {
+        var goalId = (opts && opts.goalIdOverride)
+            || ((typeof getTerminalGoal === "function") ? getTerminalGoal() : null);
         if (!goalId) return { kind: "no-goal" };
 
         var scrape;
@@ -3476,7 +4483,7 @@
                     beamWidth: (cfg && cfg.beamWidth)    || 4,
                     budgetMs:  (cfg && cfg.beamBudgetMs) || 400
                 };
-                var beamId = beamSearchFrontier(game, eg, candidateIds, chain.__craftsByOutput || {}, beamOpts);
+                var beamId = beamSearchFrontier(game, eg, candidateIds, chain.__craftsByOutput || {}, goalId, beamOpts);
                 if (beamId) { recommendedId = beamId; beamUsed = true; }
             }
         }
@@ -3542,6 +4549,25 @@
             safetyNote = unsafe.res + " safety: routing via " + swapId;
         }
 
+        // Cap-horizon guard: if the chosen entry is structurally unreachable
+        // because cost > storage cap and no craft escape, redirect to the
+        // cheapest cap-raiser. Skip when another safety redirect already fired,
+        // or when cfg.capHorizon === false (kill-switch).
+        var capHorizonOn = !cfg || cfg.capHorizon !== false;
+        if (capHorizonOn && !safetyNote && entry && entry.capLimited) {
+            var raiserId = _findCapHorizonRaiser(game, scrape, eg, entry);
+            if (raiserId && raiserId !== chain.recommended) {
+                var capChain = chainBackward(eg, raiserId);
+                annotateChainETA(game, scrape, capChain);
+                if (capChain.recommended) {
+                    chain = capChain;
+                    entry = chain.entries[chain.recommended];
+                    recNode = eg.nodes[chain.recommended];
+                    safetyNote = "cap-horizon: routing via " + raiserId;
+                }
+            }
+        }
+
         var action = nodeToAction(recNode);
         if (!action) {
             return {
@@ -3582,6 +4608,51 @@
             return result;
         };
         window.__dumpChain = dumpChain;
+        // Trace every OR-decision in the current chain with (rawLeaves,
+        // fanout, weighted score).  The option with the smallest score is
+        // the one chainBackward picks.  Rows marked ✓ are the picks.
+        window.__testFanout = function (goalId) {
+            goalId = goalId || getTerminalGoal();
+            if (!goalId) { console.warn('[testFanout] no goal'); return; }
+            var eg = (typeof getCachedEdgeGraph === 'function')
+                ? getCachedEdgeGraph(gamePage)
+                : buildEdgeGraph(gamePage, scrapeGraph(gamePage));
+            var chain = chainBackward(eg, goalId);
+            if (!chain) { console.warn('[testFanout] no chain'); return; }
+            var memo = {};
+            var rows = [];
+            var multiWay = 0, forced = 0;
+            var ids = Object.keys(chain.entries);
+            for (var i = 0; i < ids.length; i++) {
+                var e = chain.entries[ids[i]];
+                if (!e.options || e.options.length < 1) continue;
+                var kind = (e.options.length >= 2) ? 'OR' : 'forced';
+                if (e.capLimited) kind = 'cap(' + e.options.length + ')';
+                else if (e.prodLimited) kind = 'prod(' + e.options.length + ')';
+                if (e.options.length >= 2) multiWay++; else forced++;
+                for (var j = 0; j < e.options.length; j++) {
+                    var oid = e.options[j];
+                    var raw = _leafCount(chain.entries, oid, memo, eg);
+                    var fan = _effectiveFanout(eg, oid);
+                    var scored = _fanoutScore(raw, eg, oid);
+                    rows.push({
+                        parent: ids[i],
+                        kind:   kind,
+                        option: oid,
+                        rawLeaves: (raw === Infinity ? '∞' : Number(raw.toFixed(2))),
+                        fanout: fan,
+                        score:  (scored === Infinity ? '∞' : Number(scored.toFixed(2))),
+                        picked: (e.picked === oid) ? '✓' : ''
+                    });
+                }
+            }
+            console.log('[testFanout] fanoutWeight=' + cfg.fanoutWeight +
+                        ' goal=' + goalId + ' entries=' + ids.length +
+                        ' multiWayOR=' + multiWay + ' forced=' + forced +
+                        ' rows=' + rows.length);
+            console.table(rows);
+            return rows;
+        };
         window.__dumpCandidates = function () {
             var goalId = getTerminalGoal();
             if (!goalId) { console.warn('[candidates] no terminal goal set'); return; }
@@ -3748,9 +4819,54 @@
                 }
             }
             if (wasteful) continue;
-            try { gamePage.diplomacy.tradeMultiple(race, 1); traded = true; } catch (e) { }
+            // Zebras + sufficient ships: burst-trade for titanium acceleration.
+            // The game's getMaxTradeAmt respects gold/manpower/buy-resource limits.
+            var amount = 1;
+            if (_TRADE_PARTNERS[i] === 'zebras') {
+                var burst = _titaniumBurstAmount(race);
+                if (burst > 1) amount = burst;
+            }
+            try { gamePage.diplomacy.tradeMultiple(race, amount); traded = true; } catch (e) { }
         }
         if (traded) { try { gamePage.updateCaches(); } catch (e) { } }
+    }
+
+    // Compute zebra trade burst for titanium speedrun.  Returns 1 (no-op)
+    // if disabled, ships floor not met, titanium near cap, or game lacks
+    // getMaxTradeAmt.  Otherwise: min(cfg.titaniumTradeBatch, maxAffordable),
+    // also subtracting the gold reserve from gold-based affordability.
+    function _titaniumBurstAmount(zebras) {
+        var batch = (cfg.titaniumTradeBatch | 0);
+        if (batch <= 1) return 1;
+
+        var ships = gamePage.resPool && gamePage.resPool.get('ship');
+        var floor = cfg.titaniumTradeShipFloor | 0;
+        if (!ships || ships.value < floor) return 1;
+
+        // Don't waste trades when titanium is already capped.
+        var ti = gamePage.resPool.get('titanium');
+        if (ti && ti.maxValue > 0 && ti.value >= ti.maxValue * 0.95) return 1;
+
+        var maxFromGame = 1;
+        try {
+            if (typeof gamePage.diplomacy.getMaxTradeAmt === 'function') {
+                maxFromGame = gamePage.diplomacy.getMaxTradeAmt(zebras) | 0;
+            }
+        } catch (e) { return 1; }
+        if (maxFromGame < 1) return 1;
+
+        // Honor the gold reserve: getMaxTradeAmt doesn't know about it, so
+        // re-derive a gold-bounded ceiling and take the min.
+        var goldCost = 0;
+        try { goldCost = gamePage.diplomacy.getGoldCost(); } catch (e) { goldCost = 15; }
+        var gold = gamePage.resPool.get('gold');
+        var reserve = cfg.goldTradeReserve || 0;
+        var goldBound = (gold && goldCost > 0)
+            ? Math.max(0, Math.floor((gold.value - reserve) / goldCost))
+            : maxFromGame;
+
+        var n = Math.min(batch, maxFromGame, goldBound);
+        return n > 1 ? n : 1;
     }
 
     var _EXPLORE_COST = 1000;
@@ -4210,6 +5326,131 @@
     }
 
     // =========================================================================
+    //  [PS] PHASE SENSOR
+    //
+    //  A coarse classifier of "where in the run am I?" — keyed off signature
+    //  buildings and techs.  Each cycle the orchestrator calls
+    //  recordPhaseSample(); when the highest-reached tier changes, a
+    //  transition entry is appended to _phaseLog.  Used by the UI panel and
+    //  for post-run pacing analysis (speedrun timing).
+    //
+    //  Phases are intentionally chunky — we want ~10 visible milestones over
+    //  a full run, not 50 micro-steps.  The ladder is monotonic: once a
+    //  signal fires it stays fired (we read game state, never decrement).
+    // =========================================================================
+
+    // Tier ladder.  `signal(game)` returns true if THIS tier has been reached.
+    // Order matters: classifier walks top-down and returns the first hit.
+    var PHASE_LADDER = [
+        { tier: 9, name: 'Endgame',    signal: function (g) { return _bldCount(g, 'chronosphere') > 0; } },
+        { tier: 8, name: 'Space',      signal: function (g) { return _hasAnySpaceBuilding(g); } },
+        { tier: 7, name: 'Industry',   signal: function (g) { return _bldCount(g, 'steamworks') > 0
+                                                                    || _bldCount(g, 'magneto') > 0; } },
+        { tier: 6, name: 'Astronomy',  signal: function (g) { return _bldCount(g, 'observatory') > 0; } },
+        { tier: 5, name: 'Iron age',   signal: function (g) { return _bldCount(g, 'smelter') > 0; } },
+        { tier: 4, name: 'Workshop',   signal: function (g) { return _bldCount(g, 'workshop') > 0; } },
+        { tier: 3, name: 'Mineral',    signal: function (g) { return _bldCount(g, 'mine') > 0; } },
+        { tier: 2, name: 'Wood econ',  signal: function (g) { return _bldCount(g, 'field') >= 5
+                                                                    && _bldCount(g, 'hut') >= 2; } },
+        { tier: 1, name: 'Foundation', signal: function (g) { return _bldCount(g, 'library') >= 1
+                                                                    && _bldCount(g, 'hut') >= 1; } },
+        { tier: 0, name: 'Pregame',    signal: function (g) { return true; } }   // always
+    ];
+
+    function _bldCount(g, name) {
+        try {
+            if (!g || !g.bld || typeof g.bld.get !== 'function') return 0;
+            var b = g.bld.get(name);
+            return (b && typeof b.val === 'number') ? b.val : 0;
+        } catch (e) { return 0; }
+    }
+
+    function _hasAnySpaceBuilding(g) {
+        try {
+            if (!g || !g.space || !g.space.programs) return false;
+            // Space programs are missions, not buildings; check planets' buildings.
+            var planets = g.space.planets || [];
+            for (var i = 0; i < planets.length; i++) {
+                var blds = planets[i].buildings || [];
+                for (var j = 0; j < blds.length; j++)
+                    if (blds[j].val > 0) return true;
+            }
+        } catch (e) { }
+        return false;
+    }
+
+    // Returns { tier, name } for the highest-reached phase.  Pure function.
+    function detectPhase(game) {
+        for (var i = 0; i < PHASE_LADDER.length; i++) {
+            try {
+                if (PHASE_LADDER[i].signal(game))
+                    return { tier: PHASE_LADDER[i].tier, name: PHASE_LADDER[i].name };
+            } catch (e) { }
+        }
+        return { tier: 0, name: 'Pregame' };
+    }
+
+    var _phaseLog       = [];     // [{tier, name, atMs, year, season}]
+    var _lastPhaseTier  = -1;     // -1 sentinel = not sampled yet
+    var PHASE_LOG_MAX   = 100;
+
+    // Sample current phase.  If tier changed since last sample, append entry.
+    // Returns {phase, transitioned} for the orchestrator/UI.
+    function recordPhaseSample(game, nowMs) {
+        var phase = detectPhase(game);
+        var transitioned = false;
+        if (phase.tier !== _lastPhaseTier) {
+            // Skip the very first sample at tier 0 — that's just startup, not a
+            // milestone.  (Real Pregame→Foundation transitions still log.)
+            if (!(_lastPhaseTier === -1 && phase.tier === 0)) {
+                var entry = {
+                    tier: phase.tier,
+                    name: phase.name,
+                    atMs: nowMs || Date.now()
+                };
+                try {
+                    if (game && game.calendar) {
+                        entry.year   = game.calendar.year;
+                        entry.season = game.calendar.season;
+                    }
+                } catch (e) { }
+                _phaseLog.push(entry);
+                if (_phaseLog.length > PHASE_LOG_MAX) _phaseLog.shift();
+                transitioned = true;
+            }
+            _lastPhaseTier = phase.tier;
+        }
+        return { phase: phase, transitioned: transitioned };
+    }
+
+    function getPhaseLog()      { return _phaseLog.slice(); }
+    function getCurrentPhase()  { return { tier: _lastPhaseTier, name: _phaseName(_lastPhaseTier) }; }
+    function _phaseName(tier) {
+        for (var i = 0; i < PHASE_LADDER.length; i++)
+            if (PHASE_LADDER[i].tier === tier) return PHASE_LADDER[i].name;
+        return '?';
+    }
+    function _resetPhaseSensor() { _phaseLog = []; _lastPhaseTier = -1; }
+
+    if (typeof window !== 'undefined') {
+        window.__phaseLog = getPhaseLog;
+        window.__phaseNow = function () {
+            return detectPhase(typeof gamePage !== 'undefined' ? gamePage : null);
+        };
+    }
+
+    if (typeof module !== 'undefined' && module.exports) {
+        module.exports = {
+            detectPhase: detectPhase,
+            recordPhaseSample: recordPhaseSample,
+            getPhaseLog: getPhaseLog,
+            getCurrentPhase: getCurrentPhase,
+            _resetPhaseSensor: _resetPhaseSensor,
+            PHASE_LADDER: PHASE_LADDER
+        };
+    }
+
+    // =========================================================================
     //  [N] ORCHESTRATOR
     // =========================================================================
 
@@ -4268,11 +5509,47 @@
         var cycleStartMs = Date.now();
         var eg = (typeof getCachedEdgeGraph === 'function')
             ? getCachedEdgeGraph(gamePage) : null;
-        var plan = planNextAction(gamePage, eg);
+
+        // SSP-Dynamic active mode (Phase 2): override the user goal with the
+        // SSP top pick.  Falls back to user goal silently on any failure.
+        var sspPlanOpts = null;
+        var sspPickedGoal = null;
+        var sspPredictedSecs = null;
+        if (cfg.sspEnabled && typeof pickTerminalGoalSSP === 'function' && eg) {
+            try {
+                var sspResult = pickTerminalGoalSSP(gamePage, eg);
+                if (sspResult && sspResult.ranking && sspResult.ranking.length > 0) {
+                    sspPickedGoal = sspResult.ranking[0].id;
+                    sspPredictedSecs = sspResult.V ? sspResult.V[sspPickedGoal] : null;
+                    sspPlanOpts = { goalIdOverride: sspPickedGoal };
+                }
+                lastSspResult = sspResult;  // expose to UI for debug panel
+            } catch (e) { console.warn('[SSP] pick failed, using user goal', e); }
+        } else {
+            lastSspResult = null;
+        }
+
+        // Phase 4: feedback loop — track predicted vs actual completion time.
+        if (typeof _sspFeedbackTick === 'function') {
+            if (cfg.sspEnabled) _sspFeedbackTick(eg, sspPickedGoal, sspPredictedSecs);
+            else if (typeof _sspAbandonObservation === 'function') _sspAbandonObservation();
+        }
+
+        var plan = planNextAction(gamePage, eg, sspPlanOpts);
         var cycleMs = Date.now() - cycleStartMs;
         plan.__cycleMs = cycleMs;
+        plan.__goalSource = sspPickedGoal ? 'ssp' : 'user';
+        if (sspPickedGoal) plan.__sspPickedGoal = sspPickedGoal;
         if (cycleMs > 500) console.log('[Cycle] planNextAction took ' + cycleMs + 'ms');
         lastPlan = plan;
+
+        // SSP-Dynamic shadow ranking (Phase 1: observation only, no behavior change).
+        try {
+            if (cfg.sspShadow && typeof _sspShadowTick === 'function') {
+                var userGoal = (typeof getTerminalGoal === 'function') ? getTerminalGoal() : null;
+                _sspShadowTick(gamePage, eg, userGoal);
+            }
+        } catch (e) { console.warn('[SSP] shadow tick failed', e); }
 
         if (plan.kind === "no-goal") {
             setStatus('<span style="color:#888;">Pick a terminal goal to start planning.</span>', true);
@@ -4321,7 +5598,12 @@
         }
 
         _cycleCtx = null;
+        try {
+            if (typeof recordPhaseSample === 'function') recordPhaseSample(gamePage);
+        } catch (e) { console.warn('[PhaseSensor]', e); }
         updateQueueDisplay();
+        try { if (typeof updateSspDisplay === 'function') updateSspDisplay(); } catch (e) { }
+        try { if (typeof updatePhaseDisplay === 'function') updatePhaseDisplay(); } catch (e) { }
         updateLogDisplay();
     }
 
@@ -4395,18 +5677,24 @@
             return;
         }
         if (p.kind === 'blocked') {
+            var blkBadge = (p.__goalSource === 'ssp')
+                ? ' <span style="color:#0af;font-size:9px;border:1px solid #057;border-radius:2px;padding:0 3px;">SSP</span>'
+                : '';
             candidatesEl.innerHTML = '<div style="font-size:11px;">'
                 + '<span style="color:#888;font-size:10px;">GOAL</span> '
-                + '<span style="color:#0f0;">' + p.goalId + '</span></div>'
+                + '<span style="color:#0f0;">' + p.goalId + '</span>' + blkBadge + '</div>'
                 + '<div style="font-size:10px;color:#a55;margin-left:8px;">&#8627; ' + (p.reason || 'blocked') + '</div>';
             return;
         }
         // recommend
         var entry = p.entry;
         var ready = entry && entry.state === 'ready';
+        var goalBadge = (p.__goalSource === 'ssp')
+            ? ' <span style="color:#0af;font-size:9px;border:1px solid #057;border-radius:2px;padding:0 3px;">SSP</span>'
+            : '';
         var h = '<div style="font-size:11px;margin:1px 0;">'
             + '<span style="color:#888;font-size:10px;">GOAL</span> '
-            + '<span style="color:#0f0;">' + p.goalId + '</span></div>';
+            + '<span style="color:#0f0;">' + p.goalId + '</span>' + goalBadge + '</div>';
         var actTime = ready
             ? '<span style="color:#0f0;">READY</span>'
             : '<span style="color:#aa0;">' + formatTime(Math.round(p.etaSecs || 0)) + '</span>';
@@ -4425,6 +5713,87 @@
             h += '<div style="font-size:10px;color:#a55;margin-left:8px;">&#8627; ' + p.safetyNote + '</div>';
         }
         candidatesEl.innerHTML = h;
+    }
+
+    function updateSspDisplay() {
+        var section = document.getElementById('mcts_ssp_section');
+        var pendingEl = document.getElementById('mcts_ssp_pending');
+        var tableEl = document.getElementById('mcts_ssp_table');
+        if (!section || !pendingEl || !tableEl) return;
+
+        if (!cfg.sspEnabled) { section.style.display = 'none'; return; }
+        section.style.display = '';
+
+        // Pending observation panel.
+        try {
+            var pending = (typeof _sspPendingObservation === 'function')
+                ? _sspPendingObservation() : null;
+            if (pending) {
+                var elapsed = (Date.now() - pending.startedAtMs) / 1000;
+                var ratio = elapsed / pending.predictedSecs;
+                var col = ratio > 1.5 ? '#a55' : (ratio > 1.05 ? '#aa0' : '#0a7');
+                pendingEl.innerHTML = '<span style="color:#555;">tracking</span> '
+                    + '<span style="color:#0f0;">' + pending.goalId + '</span> '
+                    + '<span style="color:' + col + ';">'
+                    + formatTime(Math.round(elapsed)) + '/' + formatTime(Math.round(pending.predictedSecs))
+                    + '</span>';
+            } else {
+                pendingEl.innerHTML = '<span style="color:#555;">no goal in flight</span>';
+            }
+        } catch (e) { pendingEl.textContent = 'err: ' + e.message; }
+
+        // Top-5 ranking with bias / count.
+        try {
+            if (!lastSspResult || !lastSspResult.ranking || !lastSspResult.ranking.length) {
+                tableEl.innerHTML = '<span style="color:#555;">computing...</span>';
+                return;
+            }
+            var rows = lastSspResult.ranking.slice(0, 5);
+            var html = '';
+            for (var i = 0; i < rows.length; i++) {
+                var r = rows[i];
+                var rec = (typeof getSspBeliefRecord === 'function')
+                    ? getSspBeliefRecord(r.id) : { bias: 1, count: 0, effective: 1 };
+                var biasCol = rec.count === 0 ? '#555'
+                    : (Math.abs(rec.bias - 1) < 0.1 ? '#888'
+                       : (rec.bias > 1 ? '#a70' : '#077'));
+                var vStr = isFinite(r.V) ? formatTime(Math.round(r.V)) : '∞';
+                html += '<div style="margin:1px 0;display:flex;gap:4px;align-items:baseline;">'
+                    + '<span style="color:#888;width:14px;text-align:right;">' + (i + 1) + '.</span>'
+                    + '<span style="color:#0f0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + r.id + '</span>'
+                    + '<span style="color:#aa0;min-width:36px;text-align:right;">' + vStr + '</span>'
+                    + '<span style="color:' + biasCol + ';min-width:32px;text-align:right;" title="raw bias × count">'
+                    + rec.bias.toFixed(2) + '×' + rec.count + '</span>'
+                    + '</div>';
+            }
+            tableEl.innerHTML = html;
+        } catch (e) { tableEl.textContent = 'err: ' + e.message; }
+    }
+
+    function updatePhaseDisplay() {
+        var nowEl = document.getElementById('mcts_phase_now');
+        var logElP = document.getElementById('mcts_phase_log');
+        if (!nowEl || !logElP) return;
+        try {
+            var current = (typeof getCurrentPhase === 'function') ? getCurrentPhase() : null;
+            if (current && current.tier >= 0) {
+                nowEl.innerHTML = '<span style="color:#888;font-size:9px;">T' + current.tier + '</span> '
+                    + '<span style="color:#fa0;">' + current.name + '</span>';
+            } else {
+                nowEl.innerHTML = '<span style="color:#555;">—</span>';
+            }
+            var log = (typeof getPhaseLog === 'function') ? getPhaseLog() : [];
+            var rows = log.slice(-5).reverse();   // newest first, last 5
+            var h = '';
+            for (var i = 0; i < rows.length; i++) {
+                var e = rows[i];
+                var when = (e.year != null) ? ('Y' + e.year) : new Date(e.atMs).toLocaleTimeString();
+                h += '<div>→ T' + e.tier + ' '
+                    + '<span style="color:#fa0;">' + e.name + '</span> '
+                    + '<span style="color:#666;">(' + when + ')</span></div>';
+            }
+            logElP.innerHTML = h || '<span style="color:#555;">no transitions yet</span>';
+        } catch (e) { nowEl.textContent = 'err: ' + e.message; }
     }
 
     function updateLogDisplay() {
@@ -4453,7 +5822,8 @@
             + '<div id="mcts_body" style="padding:8px 10px;">'
                 + '<div style="margin-bottom:6px;display:flex;align-items:center;gap:10px;">'
                     + '<label style="cursor:pointer;"><input type="checkbox" id="mcts_cb_engine"> Enable</label>'
-                    + '<label style="cursor:pointer;"><input type="checkbox" id="mcts_cb_observe"> Observe</label></div>'
+                    + '<label style="cursor:pointer;"><input type="checkbox" id="mcts_cb_observe"> Observe</label>'
+                    + '<label style="cursor:pointer;" title="Use SSP-Dynamic to auto-pick the terminal goal each cycle."><input type="checkbox" id="mcts_cb_ssp"> SSP</label></div>'
                 + '<div style="margin-bottom:4px;display:flex;align-items:center;gap:6px;">'
                     + '<span style="color:#888;font-size:11px;">Clicker:</span>'
                     + '<input type="range" id="mcts_slider_clicker" min="0" max="250" value="0" style="flex:1;accent-color:#0a0;">'
@@ -4472,6 +5842,9 @@
                 + '<div style="margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;">'
                     + '<span style="color:#888;font-size:11px;">Faith reserve</span>'
                     + '<input type="number" id="mcts_input_faith_reserve" min="0" step="1" value="0" style="width:70px;background:#111;border:1px solid #333;color:#0f0;font-family:inherit;font-size:11px;padding:2px 4px;text-align:right;"></div>'
+                + '<div style="margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;" title="Trades per cycle with zebras when ships ≥ floor. 0 = off.">'
+                    + '<span style="color:#888;font-size:11px;">Ti trade burst</span>'
+                    + '<input type="number" id="mcts_input_ti_burst" min="0" max="500" step="1" value="25" style="width:70px;background:#111;border:1px solid #333;color:#0f0;font-family:inherit;font-size:11px;padding:2px 4px;text-align:right;"></div>'
                 + '<div style="margin-bottom:4px;">'
                     + '<div style="color:#888;font-size:11px;margin-bottom:2px;">Terminal goal</div>'
                     + '<input id="mcts_input_goal" list="mcts_goal_options" placeholder="type to search (e.g. tech:calendar)" style="width:100%;box-sizing:border-box;background:#111;border:1px solid #333;color:#0f0;font-family:inherit;font-size:11px;padding:2px 4px;">'
@@ -4486,6 +5859,14 @@
                 + '<div style="border-top:1px solid #222;padding-top:4px;margin-bottom:4px;">'
                     + '<div style="color:#555;font-size:10px;margin-bottom:2px;">DECISION</div>'
                     + '<div id="mcts_candidates" style="min-height:20px;"></div></div>'
+                + '<div id="mcts_ssp_section" style="border-top:1px solid #222;padding-top:4px;display:none;">'
+                    + '<div style="color:#057;font-size:10px;margin-bottom:2px;">SSP <span style="color:#555;">(top 5)</span></div>'
+                    + '<div id="mcts_ssp_pending" style="font-size:10px;color:#888;margin-bottom:2px;"></div>'
+                    + '<div id="mcts_ssp_table" style="font-size:10px;"></div></div>'
+                + '<div id="mcts_phase_section" style="border-top:1px solid #222;padding-top:4px;">'
+                    + '<div style="color:#a70;font-size:10px;margin-bottom:2px;">PHASE</div>'
+                    + '<div id="mcts_phase_now" style="font-size:11px;color:#fa0;margin-bottom:2px;">—</div>'
+                    + '<div id="mcts_phase_log" style="font-size:10px;color:#aa6;max-height:60px;overflow-y:auto;"></div></div>'
                 + '<div style="border-top:1px solid #222;padding-top:4px;">'
                     + '<div style="color:#555;font-size:10px;margin-bottom:2px;">LOG</div>'
                     + '<div id="mcts_log" style="max-height:180px;overflow-y:auto;"></div></div>'
@@ -4508,6 +5889,7 @@
 
         wireToggle('mcts_cb_engine', 'mctsEnabled');
         wireToggle('mcts_cb_observe', 'autoObserve');
+        wireToggle('mcts_cb_ssp', 'sspEnabled');
         wireSlider('mcts_slider_clicker', 'clicksPerSec', function (v) {
             setClickerRate(v); document.getElementById('mcts_lbl_clicker').textContent = v === 0 ? 'Off' : v + '/sec';
         });
@@ -4590,6 +5972,7 @@
 
         document.getElementById('mcts_cb_engine').checked = cfg.mctsEnabled;
         document.getElementById('mcts_cb_observe').checked = cfg.autoObserve;
+        document.getElementById('mcts_cb_ssp').checked = !!cfg.sspEnabled;
         document.getElementById('mcts_slider_clicker').value = cfg.clicksPerSec;
         document.getElementById('mcts_lbl_clicker').textContent = cfg.clicksPerSec === 0 ? 'Off' : cfg.clicksPerSec + '/sec';
         document.getElementById('mcts_slider_interval').value = cfg.decisionIntervalMs / 1000;
@@ -4607,6 +5990,13 @@
         faithInput.addEventListener('change', function () {
             var v = parseFloat(faithInput.value); if (isNaN(v) || v < 0) v = 0;
             faithInput.value = v; cfg.faithPraiseReserve = v; saveCfg();
+        });
+
+        var tiBurstInput = document.getElementById('mcts_input_ti_burst');
+        tiBurstInput.value = (cfg.titaniumTradeBatch != null) ? cfg.titaniumTradeBatch : 25;
+        tiBurstInput.addEventListener('change', function () {
+            var v = parseInt(tiBurstInput.value); if (isNaN(v) || v < 0) v = 0;
+            tiBurstInput.value = v; cfg.titaniumTradeBatch = v; saveCfg();
         });
 
         var speedSlider = document.getElementById('mcts_slider_speed');
@@ -4662,6 +6052,9 @@
 
     function init() {
         console.log('[Auto] v5.0 (queue planner + linear value model) initializing...');
+        window.__cfg       = cfg;
+        window.__lastPlan  = function () { return lastPlan; };
+        window.__execBuild = executeBuild;
         if (gamePage.ui && typeof gamePage.ui.confirm === 'function') {
             gamePage.ui.confirm = function (t, m, cb) { if (cb) cb(); return true; };
         }
