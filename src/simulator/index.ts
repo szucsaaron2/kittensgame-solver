@@ -1,2 +1,2 @@
 export { extract } from "./extract";
-export { apply } from "./apply";
+export { apply, ApplyError } from "./apply";
