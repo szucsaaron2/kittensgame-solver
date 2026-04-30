@@ -1,6 +1,6 @@
-node_modules/
+node_modules
+dist
+coverage
 .DS_Store
-Thumbs.db
 *.log
-.claude/
-CLAUDE.md
+.vitest-cache
