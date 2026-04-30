@@ -3,6 +3,7 @@ import { observeReflex } from "./observe";
 import { huntReflex } from "./hunt";
 import { praiseReflex } from "./praise";
 import { festivalReflex } from "./festival";
+import { refineCatnipReflex } from "./refineCatnip";
 
 /**
  * Layer 1 reflexes, in priority order. The first reflex whose `fire(s)`
@@ -23,5 +24,6 @@ export const REFLEXES: NamedReflex[] = [
   { name: "auto-observe", fire: observeReflex },
   { name: "auto-hunt", fire: huntReflex },
   { name: "auto-praise", fire: praiseReflex },
+  { name: "auto-refine-catnip", fire: refineCatnipReflex },
   { name: "auto-festival", fire: festivalReflex },
 ];
