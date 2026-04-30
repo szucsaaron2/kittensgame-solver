@@ -364,75 +364,49 @@ function applyPact(g: Any, a: ActionPact): void {
 // -- Village / labour -------------------------------------------------------
 
 function applyAssign(g: Any, a: ActionAssign): void {
-  // village.sim API:
-  //   clearJobs(hard?) — unassign every kitten
-  //   assignJob(jobName, amt) — assign `amt` free kittens to the named job
-  //   removeJob(jobName, amt) — unassign `amt` kittens from the named job
-  // (NOT removeJob(kitten) — earlier draft had this wrong.)
-  const sim = g.village?.sim;
-  if (!sim) throw new Error("village.sim not available");
+  // Mirror the in-game UI button path:
+  //   village.assignJob(jobRef, amt)   — increments jobRef.value AND calls
+  //                                       villageTab.updateTab() for refresh
+  //   village.unassignJob(kitten)      — decrements jobRef.value AND refreshes
+  //
+  // Earlier draft used village.sim.assignJob directly, which only set
+  // kitten.job — it bypassed the jobRef.value increment. The UI reads
+  // jobRef.value, so the village tab showed stale counts.
+  const village = g.village;
+  if (!village) throw new Error("village not available");
 
-  if (typeof sim.clearJobs === "function") {
-    sim.clearJobs();
+  // Step 1: unassign every kitten via the high-level path. This decrements
+  // jobRef.value for each job they were on, so per-job counts are correct.
+  const kittens = (village.sim?.kittens as Any[]) ?? [];
+  for (const k of kittens) {
+    if (k.job && typeof village.unassignJob === "function") {
+      village.unassignJob(k);
+    }
+  }
+
+  // Step 2: bulk-assign per target job through village.assignJob, which
+  // updates jobRef.value, calls sim.assignJob internally, and triggers
+  // villageTab.updateTab() for live UI refresh.
+  if (typeof village.assignJob === "function" && typeof village.getJob === "function") {
+    for (const [jobName, count] of Object.entries(a.jobs)) {
+      if (count === undefined || count <= 0) continue;
+      const jobRef = village.getJob(jobName);
+      if (!jobRef) continue;
+      village.assignJob(jobRef, count);
+    }
   } else {
-    for (const k of (sim.kittens as Any[]) ?? []) {
-      k.job = null;
+    // Fallback: low-level path (correct data, but UI may not refresh).
+    const sim = village.sim;
+    if (sim && typeof sim.clearJobs === "function") sim.clearJobs();
+    for (const [jobName, count] of Object.entries(a.jobs)) {
+      if (count === undefined || count <= 0) continue;
+      if (typeof sim?.assignJob === "function") sim.assignJob(jobName, count);
     }
   }
 
-  for (const [job, count] of Object.entries(a.jobs)) {
-    if (count === undefined || count <= 0) continue;
-    if (typeof sim.assignJob === "function") {
-      sim.assignJob(job, count);
-    } else {
-      let assigned = 0;
-      for (const k of (sim.kittens as Any[]) ?? []) {
-        if (assigned >= count) break;
-        if (!k.job) {
-          k.job = job;
-          assigned++;
-        }
-      }
-    }
+  if (typeof village.updateResourceProduction === "function") {
+    village.updateResourceProduction();
   }
-
-  if (typeof g.village?.updateResourceProduction === "function") {
-    g.village.updateResourceProduction();
-  }
-  // Force the live village tab to redraw. The right hooks (per upstream
-  // village.js) are villageTab.updateTab() and requestCensusRefresh().
-  // Each call is wrapped because in test (mocked dojo) these throw — a UI
-  // refresh failing should never sink the assign itself.
-  const safe = (fn: () => void): void => {
-    try {
-      fn();
-    } catch {
-      // ignore
-    }
-  };
-  // Mark stale + force re-render. updateTab/requestCensusRefresh only set
-  // flags consumed on the next UI tick; we additionally re-render the village
-  // tab inline so the user sees the change immediately.
-  if (typeof g.villageTab?.updateTab === "function") safe(() => g.villageTab.updateTab());
-  if (typeof g.villageTab?.requestCensusRefresh === "function")
-    safe(() => g.villageTab.requestCensusRefresh());
-  // Force the village tab to redraw if it's the currently-visible one. Empty
-  // its DOM and call render() to rebuild.
-  safe(() => {
-    const vt = g.villageTab;
-    if (!vt || typeof vt.render !== "function") return;
-    if (vt.tabBlockNode) {
-      // Empty existing DOM children, then re-render into the same node.
-      while (vt.tabBlockNode.firstChild) {
-        vt.tabBlockNode.removeChild(vt.tabBlockNode.firstChild);
-      }
-      vt.render(vt.tabBlockNode);
-    }
-  });
-  if (typeof g.ui?.render === "function") safe(() => g.ui.render());
-  if (typeof g.render === "function") safe(() => g.render());
-  // NOTE: do NOT call g.update() here — it advances tick logic which can
-  // kill kittens (starvation/sickness) inside the same call.
 }
 
 function applyEngineerAssign(g: Any, a: ActionEngineerAssign): void {
