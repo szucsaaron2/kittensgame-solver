@@ -98,6 +98,7 @@ export interface InformationalState {
   karma: number;
   unlocked: UnlockState;
   craftRecipes: Record<string, CraftRecipe>;
+  embassyPrices: Record<CivName, { name: string; val: number }[]>;
 }
 
 // ===== Belief state B_t (empty for now) =====

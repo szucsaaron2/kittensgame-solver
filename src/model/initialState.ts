@@ -83,6 +83,9 @@ export function initialState(): State {
       paragon: 0,
       karma: 0,
       craftRecipes: {},
+      embassyPrices: Object.fromEntries(
+        CIV_NAMES.map((c) => [c, [] as { name: string; val: number }[]]),
+      ) as unknown as State["info"]["embassyPrices"],
       unlocked: {
         buildings: fillBool(BUILDING_NAMES, false),
         techs: fillBool(TECH_NAMES, false),

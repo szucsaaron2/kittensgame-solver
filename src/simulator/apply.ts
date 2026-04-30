@@ -296,26 +296,47 @@ function applyRefineTC(g: Any, a: ActionRefineTC): void {
 // -- Diplomacy --------------------------------------------------------------
 
 function applyEmbassy(g: Any, a: ActionEmbassy): void {
+  // The button is wired to classes.diplomacy.ui.EmbassyButtonController.
+  // It extends BuildingStackableBtnController so the standard buyViaController
+  // path works.
+  const { classes } = ns();
+  const C = classes?.diplomacy?.ui?.EmbassyButtonController;
   const race = (g.diplomacy.races as Any[]).find((r: Any) => r.name === a.civ);
   if (!race) throw new Error(`unknown civ: ${a.civ}`);
-  const count = a.count ?? 1;
-  if (typeof g.diplomacy.buyEcorBLS === "function") {
-    g.diplomacy.buyEcorBLS(race, count);
+  if (C) {
+    const count = a.count ?? 1;
+    for (let i = 0; i < count; i++) {
+      const controller = new C(g);
+      const model = controller.fetchModel({ race, prices: race.embassyPrices });
+      controller.updateEnabled(model);
+      const result = controller.buyItem(model, null);
+      if (result?.itemBought !== true) {
+        throw new Error(`embassy buyItem failed: ${result?.reason ?? "unknown"}`);
+      }
+    }
     return;
   }
-  // Fallback: direct embassy increment, since the cost formula is well-defined.
+  // Fallback: deduct per-race embassyPrices (scaled) and increment level.
+  const count = a.count ?? 1;
+  const embassyCostReduction = num(g.getEffect?.("embassyCostReduction"), 0);
   for (let i = 0; i < count; i++) {
     const lvl = (race.embassyLevel as number | undefined) ?? 0;
-    const cultureCost = 100 * Math.pow(1.15, lvl);
-    const goldCost = 500 * Math.pow(1.15, lvl);
-    const culture = g.resPool.get("culture");
-    const gold = g.resPool.get("gold");
-    if (culture.value < cultureCost) throw new Error(`embassy: insufficient culture`);
-    if (gold.value < goldCost) throw new Error(`embassy: insufficient gold`);
-    culture.value -= cultureCost;
-    gold.value -= goldCost;
+    const ratio = Math.pow(1.15, lvl);
+    for (const p of (race.embassyPrices ?? []) as Array<{ name: string; val: number }>) {
+      const cost = p.val * (1 - embassyCostReduction) * ratio;
+      const res = g.resPool.get(p.name);
+      if (!res || res.value < cost) {
+        throw new Error(`embassy: insufficient ${p.name} (need ${cost.toFixed(2)})`);
+      }
+      res.value -= cost;
+    }
     race.embassyLevel = lvl + 1;
   }
+}
+
+function num(v: unknown, fallback = 0): number {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  return fallback;
 }
 
 function applyTrade(g: Any, a: ActionTrade): void {
@@ -389,9 +410,25 @@ function applyAssign(g: Any, a: ActionAssign): void {
       // ignore
     }
   };
+  // Mark stale + force re-render. updateTab/requestCensusRefresh only set
+  // flags consumed on the next UI tick; we additionally re-render the village
+  // tab inline so the user sees the change immediately.
   if (typeof g.villageTab?.updateTab === "function") safe(() => g.villageTab.updateTab());
   if (typeof g.villageTab?.requestCensusRefresh === "function")
     safe(() => g.villageTab.requestCensusRefresh());
+  // Force the village tab to redraw if it's the currently-visible one. Empty
+  // its DOM and call render() to rebuild.
+  safe(() => {
+    const vt = g.villageTab;
+    if (!vt || typeof vt.render !== "function") return;
+    if (vt.tabBlockNode) {
+      // Empty existing DOM children, then re-render into the same node.
+      while (vt.tabBlockNode.firstChild) {
+        vt.tabBlockNode.removeChild(vt.tabBlockNode.firstChild);
+      }
+      vt.render(vt.tabBlockNode);
+    }
+  });
   if (typeof g.ui?.render === "function") safe(() => g.ui.render());
   if (typeof g.render === "function") safe(() => g.render());
   // NOTE: do NOT call g.update() here — it advances tick logic which can

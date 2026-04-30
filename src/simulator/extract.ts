@@ -144,13 +144,26 @@ export function extract(g: Any): State {
     s.info.unlocked.policies[name as PolicyName] = bool(p.unlocked);
   }
 
-  // Diplomacy.
+  // Diplomacy + per-race embassy price snapshot.
+  // Match upstream EmbassyButtonController.getPrices:
+  //   price = base * (1 - embassyCostReduction) * 1.15^(embassyLevel + embassyFakeBought)
+  const embassyCostReduction = num(g.getEffect?.("embassyCostReduction"), 0);
+  const embassyFakeBought = num(g.getEffect?.("embassyFakeBought"), 0);
   for (const civ of CIV_NAMES) {
-     
     const r = (g.diplomacy.races as Any[])?.find((x: Any) => x.name === civ);
     if (!r) continue;
     s.info.diplomacyDiscovered[civ as CivName] = bool(r.unlocked);
     s.physical.embassies[civ as CivName] = num(r.embassyLevel);
+    const basePrices: Array<{ name: string; val: number }> = (r.embassyPrices ?? []) as Array<{
+      name: string;
+      val: number;
+    }>;
+    const coeff = 1 - embassyCostReduction;
+    const ratio = Math.pow(1.15, num(r.embassyLevel) + embassyFakeBought);
+    s.info.embassyPrices[civ as CivName] = basePrices.map((p) => ({
+      name: String(p.name),
+      val: Number(p.val) * coeff * ratio,
+    }));
   }
 
   // Job unlock flags.

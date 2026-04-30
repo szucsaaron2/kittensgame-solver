@@ -182,12 +182,12 @@ function checkRefineTC(s: State): FeasibilityReport {
 function checkEmbassy(s: State, a: ActionEmbassy): FeasibilityReport {
   const reasons: string[] = [];
   if (!s.info.diplomacyDiscovered[a.civ]) reasons.push(`civ ${a.civ} not discovered`);
-  // Embassy cost: 100 culture + 500 gold base, scales per embassy. Approximate.
-  const count = s.physical.embassies[a.civ] ?? 0;
-  const cultureCost = 100 * Math.pow(1.15, count);
-  const goldCost = 500 * Math.pow(1.15, count);
-  if ((s.physical.resources.culture ?? 0) < cultureCost) reasons.push(`insufficient culture`);
-  if ((s.physical.resources.gold ?? 0) < goldCost) reasons.push(`insufficient gold`);
+  if (a.civ === "leviathans") reasons.push(`embassies not available for leviathans`);
+  const prices = s.info.embassyPrices[a.civ] ?? [];
+  if (prices.length === 0 && s.info.diplomacyDiscovered[a.civ]) {
+    reasons.push(`no embassy prices snapshotted (extract issue?)`);
+  }
+  affordCheck(s, prices, reasons);
   return { ok: reasons.length === 0, reasons };
 }
 
