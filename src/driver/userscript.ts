@@ -196,6 +196,21 @@ const waitForGame = (): void => {
     return;
   }
   console.log("[autoplayer] gamePage detected — panel ready");
+
+  // Diagnostic: confirm the controller namespaces are reachable through
+  // unsafeWindow. If any of these are missing on first load we want to know.
+  const probe = {
+    "unsafeWindow.classes": typeof pageWindow.classes,
+    "unsafeWindow.com": typeof pageWindow.com,
+    "BuildingBtnModernController": typeof pageWindow.classes?.ui?.btn?.BuildingBtnModernController,
+    "BuildingStackableBtnController":
+      typeof pageWindow.com?.nuclearunicorn?.game?.ui?.BuildingStackableBtnController,
+    "TechButtonController": typeof pageWindow.com?.nuclearunicorn?.game?.ui?.TechButtonController,
+    "GatherCatnipButtonController":
+      typeof pageWindow.classes?.game?.ui?.GatherCatnipButtonController,
+  };
+  console.log("[autoplayer] controller probe:", probe);
+
   renderPanel("(idle)", "click [start] to begin");
 
   // Quick visibility into what the random policy *would* do right now,

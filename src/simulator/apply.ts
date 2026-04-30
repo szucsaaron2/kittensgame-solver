@@ -35,10 +35,20 @@ export class ApplyError extends Error {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Any = any;
 
-// Class controllers live on globalThis under `classes` and `com` namespaces.
+// Class controllers live on `classes` and `com` namespaces. Their location
+// depends on the runtime:
+//   - jsdom/Node tests: installed on globalThis directly (test/setup.js mock).
+//   - Tampermonkey userscript: live on unsafeWindow (the real page window),
+//     since the userscript's globalThis is a sandboxed wrapper.
+// Try unsafeWindow first if it exists; fall back to globalThis.
 function ns(): { classes: Any; com: Any } {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const gt = globalThis as any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const uw: any = (gt as any).unsafeWindow;
+  if (uw && (uw.classes || uw.com)) {
+    return { classes: uw.classes, com: uw.com };
+  }
   return { classes: gt.classes, com: gt.com };
 }
 
