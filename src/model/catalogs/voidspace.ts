@@ -13,13 +13,15 @@ export type VoidspaceName = (typeof VOIDSPACE_NAMES)[number];
 
 export interface VoidspaceNameMeta {
   inScope: boolean;
+  basePrices: { name: string; val: number }[];
+  priceRatio: number;
 }
 
 export const VOIDSPACE_META: Record<VoidspaceName, VoidspaceNameMeta> = {
-  "cryochambers": { inScope: false },
-  "usedCryochambers": { inScope: true },
-  "voidHoover": { inScope: true },
-  "voidRift": { inScope: true },
-  "chronocontrol": { inScope: true },
-  "voidResonator": { inScope: true },
+  "cryochambers": { inScope: false, basePrices: [{ name: "karma", val: 1 }, { name: "timeCrystal", val: 2 }, { name: "void", val: 100 }], priceRatio: 1.25 },
+  "usedCryochambers": { inScope: true, basePrices: [], priceRatio: 1.25 },
+  "voidHoover": { inScope: true, basePrices: [{ name: "antimatter", val: 1000 }, { name: "timeCrystal", val: 10 }, { name: "void", val: 250 }], priceRatio: 1.25 },
+  "voidRift": { inScope: true, basePrices: [{ name: "void", val: 75 }], priceRatio: 1.3 },
+  "chronocontrol": { inScope: true, basePrices: [{ name: "temporalFlux", val: 3000 }, { name: "timeCrystal", val: 30 }, { name: "void", val: 500 }], priceRatio: 1.25 },
+  "voidResonator": { inScope: true, basePrices: [{ name: "timeCrystal", val: 1000 }, { name: "relic", val: 10000 }, { name: "void", val: 50 }], priceRatio: 1.25 },
 };

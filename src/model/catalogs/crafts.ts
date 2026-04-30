@@ -28,28 +28,30 @@ export type CraftName = (typeof CRAFT_NAMES)[number];
 
 export interface CraftNameMeta {
   inScope: boolean;
+  basePrices: { name: string; val: number }[];
+  priceRatio: number;
 }
 
 export const CRAFT_META: Record<CraftName, CraftNameMeta> = {
-  "wood": { inScope: true },
-  "beam": { inScope: true },
-  "slab": { inScope: true },
-  "plate": { inScope: true },
-  "steel": { inScope: true },
-  "concrate": { inScope: true },
-  "gear": { inScope: true },
-  "alloy": { inScope: true },
-  "eludium": { inScope: true },
-  "scaffold": { inScope: true },
-  "ship": { inScope: true },
-  "tanker": { inScope: true },
-  "kerosene": { inScope: true },
-  "parchment": { inScope: true },
-  "manuscript": { inScope: true },
-  "compedium": { inScope: true },
-  "blueprint": { inScope: true },
-  "thorium": { inScope: true },
-  "megalith": { inScope: true },
-  "bloodstone": { inScope: true },
-  "tMythril": { inScope: true },
+  "wood": { inScope: true, basePrices: [{ name: "catnip", val: 100 }], priceRatio: 1 },
+  "beam": { inScope: true, basePrices: [{ name: "wood", val: 175 }], priceRatio: 1 },
+  "slab": { inScope: true, basePrices: [{ name: "minerals", val: 250 }], priceRatio: 1 },
+  "plate": { inScope: true, basePrices: [{ name: "iron", val: 125 }], priceRatio: 1 },
+  "steel": { inScope: true, basePrices: [{ name: "coal", val: 100 }, { name: "iron", val: 100 }], priceRatio: 1 },
+  "concrate": { inScope: true, basePrices: [{ name: "slab", val: 2500 }, { name: "steel", val: 25 }], priceRatio: 1 },
+  "gear": { inScope: true, basePrices: [{ name: "steel", val: 15 }], priceRatio: 1 },
+  "alloy": { inScope: true, basePrices: [{ name: "titanium", val: 10 }, { name: "steel", val: 75 }], priceRatio: 1 },
+  "eludium": { inScope: true, basePrices: [{ name: "unobtainium", val: 1000 }, { name: "alloy", val: 2500 }], priceRatio: 1 },
+  "scaffold": { inScope: true, basePrices: [{ name: "beam", val: 50 }], priceRatio: 1 },
+  "ship": { inScope: true, basePrices: [{ name: "starchart", val: 25 }, { name: "plate", val: 150 }, { name: "scaffold", val: 100 }], priceRatio: 1 },
+  "tanker": { inScope: true, basePrices: [{ name: "alloy", val: 1250 }, { name: "ship", val: 200 }, { name: "blueprint", val: 5 }], priceRatio: 1 },
+  "kerosene": { inScope: true, basePrices: [{ name: "oil", val: 7500 }], priceRatio: 1 },
+  "parchment": { inScope: true, basePrices: [{ name: "furs", val: 175 }], priceRatio: 1 },
+  "manuscript": { inScope: true, basePrices: [{ name: "culture", val: 400 }, { name: "parchment", val: 25 }], priceRatio: 1 },
+  "compedium": { inScope: true, basePrices: [{ name: "science", val: 10000 }, { name: "manuscript", val: 50 }], priceRatio: 1 },
+  "blueprint": { inScope: true, basePrices: [{ name: "science", val: 25000 }, { name: "compedium", val: 25 }], priceRatio: 1 },
+  "thorium": { inScope: true, basePrices: [{ name: "uranium", val: 250 }], priceRatio: 1 },
+  "megalith": { inScope: true, basePrices: [{ name: "beam", val: 25 }, { name: "slab", val: 50 }, { name: "plate", val: 5 }], priceRatio: 1 },
+  "bloodstone": { inScope: true, basePrices: [{ name: "timeCrystal", val: 5000 }, { name: "relic", val: 10000 }], priceRatio: 1 },
+  "tMythril": { inScope: true, basePrices: [{ name: "bloodstone", val: 5 }, { name: "ivory", val: 1000 }, { name: "titanium", val: 500 }], priceRatio: 1 },
 };

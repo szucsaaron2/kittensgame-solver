@@ -15,15 +15,17 @@ export type ChronoforgeName = (typeof CHRONOFORGE_NAMES)[number];
 
 export interface ChronoforgeNameMeta {
   inScope: boolean;
+  basePrices: { name: string; val: number }[];
+  priceRatio: number;
 }
 
 export const CHRONOFORGE_META: Record<ChronoforgeName, ChronoforgeNameMeta> = {
-  "temporalBattery": { inScope: true },
-  "blastFurnace": { inScope: true },
-  "timeBoiler": { inScope: true },
-  "controlledDelay": { inScope: true },
-  "temporalAccelerator": { inScope: true },
-  "temporalImpedance": { inScope: true },
-  "ressourceRetrieval": { inScope: true },
-  "temporalPress": { inScope: true },
+  "temporalBattery": { inScope: true, basePrices: [{ name: "timeCrystal", val: 5 }], priceRatio: 1.25 },
+  "blastFurnace": { inScope: true, basePrices: [{ name: "timeCrystal", val: 25 }, { name: "relic", val: 5 }], priceRatio: 1.25 },
+  "timeBoiler": { inScope: true, basePrices: [{ name: "timeCrystal", val: 25000 }], priceRatio: 1.25 },
+  "controlledDelay": { inScope: true, basePrices: [{ name: "timeCrystal", val: 1 }, { name: "gear", val: 10 }], priceRatio: 1 },
+  "temporalAccelerator": { inScope: true, basePrices: [{ name: "timeCrystal", val: 10 }, { name: "relic", val: 1000 }], priceRatio: 1.25 },
+  "temporalImpedance": { inScope: true, basePrices: [{ name: "timeCrystal", val: 100 }, { name: "relic", val: 250 }], priceRatio: 1.05 },
+  "ressourceRetrieval": { inScope: true, basePrices: [{ name: "timeCrystal", val: 1000 }], priceRatio: 1.3 },
+  "temporalPress": { inScope: true, basePrices: [{ name: "timeCrystal", val: 100 }, { name: "void", val: 10 }], priceRatio: 1.1 },
 };

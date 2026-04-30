@@ -8,8 +8,10 @@ export type VoidUpgradeName = (typeof VOID_UPGRADE_NAMES)[number];
 
 export interface VoidUpgradeNameMeta {
   inScope: boolean;
+  basePrices: { name: string; val: number }[];
+  priceRatio: number;
 }
 
 export const VOID_UPGRADE_META: Record<VoidUpgradeName, VoidUpgradeNameMeta> = {
-  "spaceCathedral": { inScope: false },
+  "spaceCathedral": { inScope: false, basePrices: [{ name: "relic", val: 1 }], priceRatio: 1 },
 };

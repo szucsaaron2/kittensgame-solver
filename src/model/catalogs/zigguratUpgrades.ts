@@ -17,17 +17,19 @@ export type ZigguratName = (typeof ZIGGURAT_NAMES)[number];
 
 export interface ZigguratNameMeta {
   inScope: boolean;
+  basePrices: { name: string; val: number }[];
+  priceRatio: number;
 }
 
 export const ZIGGURAT_META: Record<ZigguratName, ZigguratNameMeta> = {
-  "unicornTomb": { inScope: true },
-  "ivoryTower": { inScope: true },
-  "ivoryCitadel": { inScope: true },
-  "skyPalace": { inScope: true },
-  "unicornUtopia": { inScope: true },
-  "sunspire": { inScope: true },
-  "marker": { inScope: true },
-  "unicornGraveyard": { inScope: true },
-  "unicornNecropolis": { inScope: true },
-  "blackPyramid": { inScope: true },
+  "unicornTomb": { inScope: true, basePrices: [{ name: "ivory", val: 500 }, { name: "tears", val: 5 }], priceRatio: 1.15 },
+  "ivoryTower": { inScope: true, basePrices: [{ name: "ivory", val: 25000 }, { name: "tears", val: 25 }], priceRatio: 1.15 },
+  "ivoryCitadel": { inScope: true, basePrices: [{ name: "ivory", val: 50000 }, { name: "tears", val: 50 }], priceRatio: 1.15 },
+  "skyPalace": { inScope: true, basePrices: [{ name: "ivory", val: 125000 }, { name: "tears", val: 500 }, { name: "megalith", val: 5 }], priceRatio: 1.15 },
+  "unicornUtopia": { inScope: true, basePrices: [{ name: "gold", val: 500 }, { name: "ivory", val: 1000000 }, { name: "tears", val: 5000 }], priceRatio: 1.15 },
+  "sunspire": { inScope: true, basePrices: [{ name: "gold", val: 1250 }, { name: "ivory", val: 750000 }, { name: "tears", val: 25000 }], priceRatio: 1.15 },
+  "marker": { inScope: true, basePrices: [{ name: "unobtainium", val: 2500 }, { name: "spice", val: 50000 }, { name: "tears", val: 5000 }, { name: "megalith", val: 750 }], priceRatio: 1.15 },
+  "unicornGraveyard": { inScope: true, basePrices: [{ name: "necrocorn", val: 5 }, { name: "megalith", val: 1000 }], priceRatio: 1.15 },
+  "unicornNecropolis": { inScope: true, basePrices: [{ name: "alicorn", val: 100 }, { name: "necrocorn", val: 15 }, { name: "void", val: 5 }, { name: "megalith", val: 2500 }], priceRatio: 1.15 },
+  "blackPyramid": { inScope: true, basePrices: [{ name: "unobtainium", val: 5000 }, { name: "spice", val: 150000 }, { name: "sorrow", val: 5 }, { name: "megalith", val: 2500 }], priceRatio: 1.15 },
 };

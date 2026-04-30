@@ -17,17 +17,19 @@ export type ReligionUpgradeName = (typeof RELIGION_UPGRADE_NAMES)[number];
 
 export interface ReligionUpgradeNameMeta {
   inScope: boolean;
+  basePrices: { name: string; val: number }[];
+  priceRatio: number;
 }
 
 export const RELIGION_UPGRADE_META: Record<ReligionUpgradeName, ReligionUpgradeNameMeta> = {
-  "solarchant": { inScope: true },
-  "scholasticism": { inScope: true },
-  "goldenSpire": { inScope: true },
-  "sunAltar": { inScope: true },
-  "stainedGlass": { inScope: true },
-  "solarRevolution": { inScope: true },
-  "basilica": { inScope: true },
-  "templars": { inScope: true },
-  "apocripha": { inScope: true },
-  "transcendence": { inScope: true },
+  "solarchant": { inScope: true, basePrices: [{ name: "faith", val: 100 }], priceRatio: 2.5 },
+  "scholasticism": { inScope: true, basePrices: [{ name: "faith", val: 250 }], priceRatio: 2.5 },
+  "goldenSpire": { inScope: true, basePrices: [{ name: "gold", val: 150 }, { name: "faith", val: 350 }], priceRatio: 2.5 },
+  "sunAltar": { inScope: true, basePrices: [{ name: "gold", val: 250 }, { name: "faith", val: 500 }], priceRatio: 2.5 },
+  "stainedGlass": { inScope: true, basePrices: [{ name: "gold", val: 250 }, { name: "faith", val: 500 }], priceRatio: 2.5 },
+  "solarRevolution": { inScope: true, basePrices: [{ name: "gold", val: 500 }, { name: "faith", val: 750 }], priceRatio: 1 },
+  "basilica": { inScope: true, basePrices: [{ name: "gold", val: 750 }, { name: "faith", val: 1250 }], priceRatio: 2.5 },
+  "templars": { inScope: true, basePrices: [{ name: "gold", val: 3000 }, { name: "faith", val: 3500 }], priceRatio: 2.5 },
+  "apocripha": { inScope: true, basePrices: [{ name: "gold", val: 5000 }, { name: "faith", val: 5000 }], priceRatio: 1 },
+  "transcendence": { inScope: true, basePrices: [{ name: "gold", val: 7500 }, { name: "faith", val: 7500 }], priceRatio: 1 },
 };

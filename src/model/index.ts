@@ -44,4 +44,5 @@ export { isAction, assertNever } from "./action";
 export { initialState } from "./initialState";
 export { checkInvariants } from "./invariants";
 export { goal, goalReport, type GoalReport } from "./goal";
+export { feasible, feasibilityReport, type FeasibilityReport } from "./feasibility";
 export * from "./catalogs";

@@ -17,17 +17,19 @@ export type TranscendenceName = (typeof TRANSCENDENCE_NAMES)[number];
 
 export interface TranscendenceNameMeta {
   inScope: boolean;
+  basePrices: { name: string; val: number }[];
+  priceRatio: number;
 }
 
 export const TRANSCENDENCE_META: Record<TranscendenceName, TranscendenceNameMeta> = {
-  "blackObelisk": { inScope: false },
-  "blackNexus": { inScope: false },
-  "blackCore": { inScope: false },
-  "singularity": { inScope: false },
-  "blackLibrary": { inScope: false },
-  "blackRadiance": { inScope: false },
-  "blazar": { inScope: false },
-  "darkNova": { inScope: false },
-  "mausoleum": { inScope: false },
-  "holyGenocide": { inScope: false },
+  "blackObelisk": { inScope: false, basePrices: [{ name: "relic", val: 100 }], priceRatio: 1.15 },
+  "blackNexus": { inScope: false, basePrices: [{ name: "relic", val: 5000 }], priceRatio: 1.15 },
+  "blackCore": { inScope: false, basePrices: [{ name: "relic", val: 10000 }], priceRatio: 1.15 },
+  "singularity": { inScope: false, basePrices: [{ name: "relic", val: 25000 }], priceRatio: 1.15 },
+  "blackLibrary": { inScope: false, basePrices: [{ name: "relic", val: 30000 }], priceRatio: 1.15 },
+  "blackRadiance": { inScope: false, basePrices: [{ name: "relic", val: 37500 }], priceRatio: 1.15 },
+  "blazar": { inScope: false, basePrices: [{ name: "relic", val: 50000 }], priceRatio: 1.15 },
+  "darkNova": { inScope: false, basePrices: [{ name: "relic", val: 75000 }, { name: "void", val: 7500 }], priceRatio: 1.15 },
+  "mausoleum": { inScope: false, basePrices: [{ name: "relic", val: 50000 }, { name: "void", val: 12500 }, { name: "necrocorn", val: 10 }], priceRatio: 1.15 },
+  "holyGenocide": { inScope: false, basePrices: [{ name: "relic", val: 100000 }, { name: "void", val: 25000 }], priceRatio: 1.15 },
 };

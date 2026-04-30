@@ -19,54 +19,56 @@ export type PlanetName = (typeof PLANET_NAMES)[number];
 
 export interface PlanetBuildingMeta {
   inScope: boolean;
+  basePrices: { name: string; val: number }[];
+  priceRatio: number;
 }
 
 export const PLANET_BUILDING_META: Record<PlanetName, Record<string, PlanetBuildingMeta>> = {
   "cath": {
-    "spaceElevator": { inScope: true },
-    "sattelite": { inScope: true },
-    "spaceStation": { inScope: true },
+    "spaceElevator": { inScope: true, basePrices: [{ name: "titanium", val: 6000 }, { name: "unobtainium", val: 50 }, { name: "science", val: 75000 }], priceRatio: 1.15 },
+    "sattelite": { inScope: true, basePrices: [{ name: "titanium", val: 2500 }, { name: "oil", val: 15000 }, { name: "science", val: 100000 }, { name: "starchart", val: 325 }], priceRatio: 1.08 },
+    "spaceStation": { inScope: true, basePrices: [{ name: "oil", val: 35000 }, { name: "science", val: 150000 }, { name: "starchart", val: 425 }, { name: "alloy", val: 750 }], priceRatio: 1.12 },
   },
   "moon": {
-    "moonOutpost": { inScope: true },
-    "moonBase": { inScope: true },
+    "moonOutpost": { inScope: true, basePrices: [{ name: "oil", val: 55000 }, { name: "uranium", val: 500 }, { name: "science", val: 100000 }, { name: "starchart", val: 650 }, { name: "concrate", val: 150 }, { name: "alloy", val: 750 }], priceRatio: 1.12 },
+    "moonBase": { inScope: true, basePrices: [{ name: "titanium", val: 9500 }, { name: "oil", val: 70000 }, { name: "unobtainium", val: 50 }, { name: "science", val: 100000 }, { name: "starchart", val: 700 }, { name: "concrate", val: 250 }], priceRatio: 1.12 },
   },
   "dune": {
-    "planetCracker": { inScope: true },
-    "hydrofracturer": { inScope: true },
-    "spiceRefinery": { inScope: true },
+    "planetCracker": { inScope: true, basePrices: [{ name: "science", val: 125000 }, { name: "starchart", val: 2500 }, { name: "alloy", val: 1750 }, { name: "kerosene", val: 50 }], priceRatio: 1.18 },
+    "hydrofracturer": { inScope: true, basePrices: [{ name: "science", val: 150000 }, { name: "starchart", val: 750 }, { name: "alloy", val: 1025 }, { name: "kerosene", val: 100 }], priceRatio: 1.18 },
+    "spiceRefinery": { inScope: true, basePrices: [{ name: "science", val: 75000 }, { name: "starchart", val: 500 }, { name: "alloy", val: 500 }, { name: "kerosene", val: 125 }], priceRatio: 1.15 },
   },
   "piscine": {
-    "researchVessel": { inScope: true },
-    "orbitalArray": { inScope: true },
+    "researchVessel": { inScope: true, basePrices: [{ name: "titanium", val: 12500 }, { name: "starchart", val: 100 }, { name: "alloy", val: 2500 }, { name: "kerosene", val: 250 }], priceRatio: 1.15 },
+    "orbitalArray": { inScope: true, basePrices: [{ name: "science", val: 250000 }, { name: "starchart", val: 2000 }, { name: "eludium", val: 100 }, { name: "kerosene", val: 500 }], priceRatio: 1.15 },
   },
   "helios": {
-    "sunlifter": { inScope: true },
-    "containmentChamber": { inScope: true },
-    "heatsink": { inScope: true },
-    "sunforge": { inScope: true },
+    "sunlifter": { inScope: true, basePrices: [{ name: "science", val: 500000 }, { name: "eludium", val: 225 }, { name: "kerosene", val: 2500 }], priceRatio: 1.15 },
+    "containmentChamber": { inScope: true, basePrices: [{ name: "science", val: 500000 }, { name: "kerosene", val: 2500 }], priceRatio: 1.125 },
+    "heatsink": { inScope: true, basePrices: [{ name: "science", val: 125000 }, { name: "relic", val: 1 }, { name: "kerosene", val: 5000 }, { name: "thorium", val: 12500 }], priceRatio: 1.12 },
+    "sunforge": { inScope: true, basePrices: [{ name: "antimatter", val: 250 }, { name: "science", val: 100000 }, { name: "relic", val: 1 }, { name: "kerosene", val: 1250 }], priceRatio: 1.12 },
   },
   "terminus": {
-    "cryostation": { inScope: true },
+    "cryostation": { inScope: true, basePrices: [{ name: "science", val: 200000 }, { name: "concrate", val: 1500 }, { name: "eludium", val: 25 }, { name: "kerosene", val: 500 }], priceRatio: 1.12 },
   },
   "kairo": {
-    "spaceBeacon": { inScope: true },
+    "spaceBeacon": { inScope: true, basePrices: [{ name: "antimatter", val: 50 }, { name: "starchart", val: 25000 }, { name: "alloy", val: 25000 }, { name: "kerosene", val: 7500 }], priceRatio: 1.15 },
   },
   "yarn": {
-    "terraformingStation": { inScope: true },
-    "hydroponics": { inScope: true },
+    "terraformingStation": { inScope: true, basePrices: [{ name: "uranium", val: 5000 }, { name: "antimatter", val: 25 }, { name: "kerosene", val: 5000 }], priceRatio: 1.25 },
+    "hydroponics": { inScope: true, basePrices: [{ name: "unobtainium", val: 1 }, { name: "kerosene", val: 500 }], priceRatio: 1.15 },
   },
   "umbra": {
-    "hrHarvester": { inScope: true },
-    "navigationRelay": { inScope: true },
-    "spaceShuttle": { inScope: true },
+    "hrHarvester": { inScope: true, basePrices: [{ name: "antimatter", val: 1250 }, { name: "relic", val: 25 }], priceRatio: 1.15 },
+    "navigationRelay": { inScope: true, basePrices: [{ name: "titanium", val: 50000 }, { name: "concrate", val: 5000 }], priceRatio: 1.2 },
+    "spaceShuttle": { inScope: true, basePrices: [{ name: "antimatter", val: 50 }, { name: "eludium", val: 500 }], priceRatio: 1.15 },
   },
   "charon": {
-    "entangler": { inScope: true },
+    "entangler": { inScope: true, basePrices: [{ name: "antimatter", val: 5250 }, { name: "relic", val: 1250 }, { name: "eludium", val: 5000 }], priceRatio: 1.15 },
   },
   "centaurusSystem": {
-    "tectonic": { inScope: true },
-    "moltenCore": { inScope: true },
+    "tectonic": { inScope: true, basePrices: [{ name: "antimatter", val: 500 }, { name: "thorium", val: 75000 }], priceRatio: 1.25 },
+    "moltenCore": { inScope: true, basePrices: [{ name: "uranium", val: 5000000 }, { name: "science", val: 25000000 }], priceRatio: 1.25 },
   },
   "furthestRing": {
 

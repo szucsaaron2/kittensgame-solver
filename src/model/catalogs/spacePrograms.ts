@@ -20,20 +20,22 @@ export type SpaceProgramName = (typeof SPACE_PROGRAM_NAMES)[number];
 
 export interface SpaceProgramNameMeta {
   inScope: boolean;
+  basePrices: { name: string; val: number }[];
+  priceRatio: number;
 }
 
 export const SPACE_PROGRAM_META: Record<SpaceProgramName, SpaceProgramNameMeta> = {
-  "orbitalLaunch": { inScope: true },
-  "moonMission": { inScope: true },
-  "duneMission": { inScope: true },
-  "piscineMission": { inScope: true },
-  "heliosMission": { inScope: true },
-  "terminusMission": { inScope: true },
-  "kairoMission": { inScope: true },
-  "rorschachMission": { inScope: true },
-  "yarnMission": { inScope: true },
-  "umbraMission": { inScope: true },
-  "charonMission": { inScope: true },
-  "centaurusSystemMission": { inScope: true },
-  "furthestRingMission": { inScope: true },
+  "orbitalLaunch": { inScope: true, basePrices: [{ name: "oil", val: 15000 }, { name: "manpower", val: 5000 }, { name: "science", val: 100000 }, { name: "starchart", val: 250 }], priceRatio: 1 },
+  "moonMission": { inScope: true, basePrices: [{ name: "titanium", val: 5000 }, { name: "oil", val: 45000 }, { name: "science", val: 125000 }, { name: "starchart", val: 500 }], priceRatio: 1 },
+  "duneMission": { inScope: true, basePrices: [{ name: "titanium", val: 7000 }, { name: "science", val: 175000 }, { name: "starchart", val: 1000 }, { name: "kerosene", val: 75 }], priceRatio: 1 },
+  "piscineMission": { inScope: true, basePrices: [{ name: "titanium", val: 9000 }, { name: "science", val: 200000 }, { name: "starchart", val: 1500 }, { name: "kerosene", val: 250 }], priceRatio: 1 },
+  "heliosMission": { inScope: true, basePrices: [{ name: "titanium", val: 15000 }, { name: "science", val: 250000 }, { name: "starchart", val: 3000 }, { name: "kerosene", val: 1250 }], priceRatio: 1 },
+  "terminusMission": { inScope: true, basePrices: [{ name: "titanium", val: 12000 }, { name: "science", val: 225000 }, { name: "starchart", val: 2500 }, { name: "kerosene", val: 750 }], priceRatio: 1 },
+  "kairoMission": { inScope: true, basePrices: [{ name: "titanium", val: 20000 }, { name: "science", val: 300000 }, { name: "starchart", val: 5000 }, { name: "kerosene", val: 7500 }], priceRatio: 1 },
+  "rorschachMission": { inScope: true, basePrices: [{ name: "titanium", val: 80000 }, { name: "science", val: 500000 }, { name: "starchart", val: 15000 }, { name: "kerosene", val: 25000 }], priceRatio: 1 },
+  "yarnMission": { inScope: true, basePrices: [{ name: "titanium", val: 35000 }, { name: "science", val: 350000 }, { name: "starchart", val: 7500 }, { name: "kerosene", val: 12000 }], priceRatio: 1 },
+  "umbraMission": { inScope: true, basePrices: [{ name: "science", val: 500000 }, { name: "starchart", val: 25000 }, { name: "kerosene", val: 25000 }, { name: "thorium", val: 15000 }], priceRatio: 1 },
+  "charonMission": { inScope: true, basePrices: [{ name: "science", val: 750000 }, { name: "starchart", val: 75000 }, { name: "kerosene", val: 35000 }, { name: "thorium", val: 35000 }], priceRatio: 1 },
+  "centaurusSystemMission": { inScope: true, basePrices: [{ name: "titanium", val: 40000 }, { name: "science", val: 800000 }, { name: "starchart", val: 100000 }, { name: "kerosene", val: 50000 }, { name: "thorium", val: 50000 }], priceRatio: 1 },
+  "furthestRingMission": { inScope: true, basePrices: [{ name: "science", val: 1250000 }, { name: "starchart", val: 500000 }, { name: "kerosene", val: 75000 }, { name: "thorium", val: 75000 }], priceRatio: 1 },
 };

@@ -6,6 +6,8 @@ export type CryptotheologyName = never;
 
 export interface CryptotheologyNameMeta {
   inScope: boolean;
+  basePrices: { name: string; val: number }[];
+  priceRatio: number;
 }
 
 export const CRYPTOTHEOLOGY_META: Record<string, CryptotheologyNameMeta> = {};
