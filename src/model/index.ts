@@ -12,4 +12,5 @@ export type {
 export type Action = unknown;
 export { initialState } from "./initialState";
 export { checkInvariants } from "./invariants";
+export { goal, goalReport, type GoalReport } from "./goal";
 export * from "./catalogs";
