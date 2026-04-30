@@ -94,6 +94,12 @@ export interface FlowSnapshot {
   production: Record<ResourceName, number>;
   consumption: Record<ResourceName, number>;
   catnipSeasonalFactor: number;
+  /**
+   * Energy net (production - consumption) per tick. Tracked outside the
+   * resource maps because energy is a flow, not a stockable resource.
+   * Mirrors gamePage.workshop.getEnergyDelta() at extract time.
+   */
+  energyNet: number;
 }
 
 export interface InformationalState {

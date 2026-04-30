@@ -96,6 +96,7 @@ export function initialState(): State {
         production: fillNumber(RESOURCE_NAMES, 0),
         consumption: fillNumber(RESOURCE_NAMES, 0),
         catnipSeasonalFactor: 1.0,
+        energyNet: 0,
       },
       unlocked: {
         buildings: fillBool(BUILDING_NAMES, false),

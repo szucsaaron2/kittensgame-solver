@@ -303,6 +303,7 @@ export function extract(g: Any): State {
     s.info.calendar.season,
     s.info.weather,
   );
+  s.info.flow.energyNet = s.info.energy;
 
    
   s.info.happiness = num(g.village?.happiness, 1);
