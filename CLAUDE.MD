@@ -66,11 +66,54 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 ---
 
-## 5. Project-Specific Knowledge
+## 5. Strict Version Control
+
+**Commit early, commit often, with descriptive messages.** This is non-negotiable. The transparency this discipline provides is load-bearing for the project — every change is reviewable, bisectable, and reversible.
+
+Concrete rules:
+
+- **One commit per logical unit of work.** Bug fix, new feature, refactor — each gets its own commit. Don't bundle unrelated changes.
+- **Commit after every accepted change.** Don't accumulate uncommitted work. If a session-level chat is going to make N changes, that's N commits, not one big one at the end.
+- **Commit messages explain the *why*.** A subject line of "fix bug" is useless six months later. Format:
+  - Subject: imperative, one line, what changed (e.g. "Add craft action with workshop-building gate").
+  - Body: why this change, what was tried/rejected, references to the upstream behavior or report that motivated it. Multi-paragraph is fine.
+  - When fixing a live-test report, quote the symptom in the body so the commit is searchable later.
+- **Never amend or rebase committed history** unless the user explicitly asks. New problem → new commit.
+- **Never use `--no-verify` to skip hooks** unless the user explicitly authorizes it. If a hook fails, fix the underlying issue.
+- **Run `pnpm lint && pnpm typecheck && pnpm test` before committing** anything beyond a documentation tweak. Green-on-the-wire is the baseline; if a commit breaks the pipeline it's harder to bisect later.
+- **`git status` and `git log --oneline -10` after every commit** to confirm the tree is clean and the history reads sensibly.
+
+The current flow — small, well-named commits with informative bodies, easy to read in `git log` — is exactly the target. Maintain it.
+
+## 6. Diary Discipline
+
+**[DIARY.MD](DIARY.MD) must be kept current.** It is the cross-session memory; let it drift and future chats waste hours re-discovering context.
+
+When to update DIARY.md:
+
+- **At the end of every session** that did meaningful work. "Session N — title" becomes a new section.
+- **Whenever a plan completes** or a phase boundary is crossed.
+- **When a non-obvious bug is found and fixed.** The bug, the root cause, and the fix all go in. These entries pay back the most over time.
+- **When an architectural decision is made or revised.** Record what was tried, what was rejected, and why.
+
+What goes in each session entry:
+
+- Goal of the session.
+- What landed (concrete deliverables, not aspirations).
+- Plan deviations and why.
+- Gotchas discovered (especially upstream-game quirks).
+- Bugs found in order, each with root cause + fix.
+- Anything that changed the architecture's shape.
+
+Don't bother diary-ing routine maintenance (dependency bumps, cosmetic refactors). The bar is "would a future chat benefit from knowing this?"
+
+When in doubt, write a diary entry. Two minutes of writing now saves an hour of re-discovery later.
+
+## 7. Project-Specific Knowledge
 
 **Read [DIARY.MD](DIARY.MD) for chronological context** — what plans have been executed, which bugs have been found, what was tried and discarded. New chats should consult it before assuming anything about the codebase's history.
 
-### 5.1 Layout
+### 7.1 Layout
 
 ```
 src/
@@ -94,20 +137,20 @@ scripts/                    Generators + ad-hoc inspection helpers.
 tests/{unit,integration,property}/   Vitest tests.
 ```
 
-### 5.2 Architectural rules to never break
+### 7.2 Architectural rules to never break
 
 - **`extract` is the only place that reads gamePage.** Feasibility, goal, invariants, and enumerate must be pure functions of State.
 - **`apply` is the only place that mutates gamePage.** Tests, scripts, and the driver should not bypass it.
 - **Catalogs are generated, never hand-edited.** `scripts/generate-catalogs.ts` writes them. Re-run after any change to `kittensgame-master/`. Headers say `AUTO-GENERATED`.
 - **Use the upstream high-level wrapper, not the low-level `sim.X`.** `village.assignJob`, `village.unassignJob`, controller `buyItem` — these update display fields and trigger UI refreshes that the underlying methods skip.
 
-### 5.3 Boot harness gotchas
+### 7.3 Boot harness gotchas
 
 - **Use `test/setup.js` style boot, not JSDOM(index.html).** Upstream's dojo XHR loader doesn't work in jsdom; the maintainers themselves abandoned that path. We mock dojo and `require()` modules directly. See `src/testdriver/setupGame.ts`.
 - **In Tampermonkey, controller classes live on `unsafeWindow`, not `globalThis`.** `apply.ts`'s `ns()` helper handles this — try `unsafeWindow` first, fall back to `globalThis` for jsdom.
 - **`g.update()` advances tick logic** (kittens can starve, etc.). Never call it from `apply` — only from the driver loop.
 
-### 5.4 Adding a new action variant
+### 7.4 Adding a new action variant
 
 1. Add interface to `src/model/action.ts`, add to the `Action` union.
 2. Re-export from `src/model/index.ts`.
@@ -117,7 +160,7 @@ tests/{unit,integration,property}/   Vitest tests.
 6. Add the case to the exhaustiveness switch in `tests/unit/action.test.ts`.
 7. Write integration tests for both the apply happy path and at least one feasibility-rejection case.
 
-### 5.5 Common failure modes (and what fixed each)
+### 7.5 Common failure modes (and what fixed each)
 
 | Symptom | Root cause | Fix |
 |---|---|---|
@@ -128,7 +171,7 @@ tests/{unit,integration,property}/   Vitest tests.
 | Action stays "feasible" forever and errors on apply | Hardcoded cost differs from upstream | Snapshot live cost from gamePage at extract time, compare in feasibility |
 | Goal predicate unsatisfiable | Required every policy researched, but pairs mutually block | Satisfied = researched OR blocked |
 
-### 5.6 Live debugging
+### 7.6 Live debugging
 
 The browser userscript exposes a panel and console hooks:
 - `[start]/[stop]` — run random policy at 2s steps
@@ -137,6 +180,6 @@ The browser userscript exposes a panel and console hooks:
 
 `[verify]` is the most powerful: cross-checks every enumerated action against the live game's own affordability/unlock flags. Use it when fixing predicate bugs.
 
-### 5.7 When new actions/concepts come from live testing
+### 7.7 When new actions/concepts come from live testing
 
 The live-test cycle has been finding ~1 bug per session. The pattern is: run, watch `stats.errors`, fix the predicate or apply path, repeat. Don't try to be exhaustive in advance — let the runs surface what's broken.
