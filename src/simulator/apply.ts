@@ -138,6 +138,11 @@ export function apply(g: Any, a: Action): void {
 // -- Gather catnip ---------------------------------------------------------
 
 function applyGatherCatnip(g: Any): void {
+  // Manager method first; controller fallback for completeness.
+  if (typeof g.bld?.gatherCatnip === "function") {
+    g.bld.gatherCatnip();
+    return;
+  }
   const { classes } = ns();
   const C = classes?.game?.ui?.GatherCatnipButtonController;
   if (C) {
@@ -150,17 +155,32 @@ function applyGatherCatnip(g: Any): void {
     }
     return;
   }
-  // Fallback: directly add 1 catnip — the underlying button literally does this.
+  // Last-ditch: directly add 1 catnip.
   const catnip = g.resPool.get("catnip");
   if (!catnip) throw new Error("no catnip resource");
   catnip.value = (catnip.value as number) + 1;
 }
 
 function applyRefineCatnip(g: Any): void {
+  // Manager method first — it's what the button ultimately calls and avoids
+  // dojo's `this.inherited(arguments)` chain which can fail when we
+  // instantiate the controller standalone outside the rendered button tree.
+  // We do the cost deduction manually since the manager method only handles
+  // the gain side.
+  const cost = g.workshop?.get?.("advancedRefinement")?.researched ? 50 : 100;
+  const catnip = g.resPool?.get?.("catnip");
+  if (!catnip || catnip.value < cost) {
+    throw new Error(`refine-catnip: insufficient catnip (need ${cost}, have ${catnip?.value ?? 0})`);
+  }
+  if (typeof g.bld?.refineCatnip === "function") {
+    catnip.value -= cost;
+    g.bld.refineCatnip();
+    return;
+  }
+  // Last-ditch: try the controller. (Won't normally be reached.)
   const { classes } = ns();
   const C = classes?.game?.ui?.RefineCatnipButtonController;
   if (C) {
-    const cost = g.workshop?.get?.("advancedRefinement")?.researched ? 50 : 100;
     const controller = new C(g);
     const model = controller.fetchModel({ prices: [{ name: "catnip", val: cost }] });
     controller.updateEnabled(model);
@@ -170,12 +190,7 @@ function applyRefineCatnip(g: Any): void {
     }
     return;
   }
-  // Fallback: call the manager method directly (this is what the button does).
-  if (typeof g.bld?.refineCatnip === "function") {
-    g.bld.refineCatnip();
-    return;
-  }
-  throw new Error("refine-catnip: no controller and no manager method");
+  throw new Error("refine-catnip: no manager method and no controller");
 }
 
 // -- Building / construction -----------------------------------------------
