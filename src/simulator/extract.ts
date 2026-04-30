@@ -1,6 +1,220 @@
-import type { State } from "@/model";
+import { initialState } from "@/model";
+import type { State, Season, Weather } from "@/model";
+import {
+  RESOURCE_NAMES,
+  BUILDING_NAMES,
+  TECH_NAMES,
+  WORKSHOP_NAMES,
+  RELIGION_UPGRADE_NAMES,
+  ZIGGURAT_NAMES,
+  TRANSCENDENCE_NAMES,
+  CHRONOFORGE_NAMES,
+  VOIDSPACE_NAMES,
+  SPACE_PROGRAM_NAMES,
+  POLICY_NAMES,
+  CIV_NAMES,
+  JOB_NAMES,
+  PLANET_NAMES,
+  PLANET_BUILDING_NAMES,
+} from "@/model/catalogs";
+import type {
+  ResourceName,
+  BuildingName,
+  TechName,
+  WorkshopName,
+  ReligionUpgradeName,
+  ZigguratName,
+  TranscendenceName,
+  ChronoforgeName,
+  VoidspaceName,
+  SpaceProgramName,
+  PolicyName,
+  CivName,
+  JobName,
+} from "@/model/catalogs";
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars
-export function extract(_gamePage: any): State {
-  throw new Error("extract: not yet implemented (Phase 8)");
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Any = any;
+
+function num(v: unknown, fallback = 0): number {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  return fallback;
+}
+function bool(v: unknown): boolean {
+  return v === true;
+}
+
+export function extract(g: Any): State {
+  const s = initialState();
+
+  // Resources.
+  for (const name of RESOURCE_NAMES) {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+    const r = g.resPool.get(name);
+    if (!r) continue;
+    s.physical.resources[name as ResourceName] = num(r.value);
+    const cap = num(r.maxValue, 0);
+    s.physical.resourceCaps[name as ResourceName] = cap > 0 ? cap : Infinity;
+  }
+
+  // Buildings (bonfire / terrestrial).
+  for (const name of BUILDING_NAMES) {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+    const b = g.bld.get(name);
+    if (!b) continue;
+    s.physical.buildings[name as BuildingName] = num(b.val);
+  }
+
+  // Techs.
+  for (const name of TECH_NAMES) {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+    const t = g.science.get(name);
+    if (!t) continue;
+    s.info.techs[name as TechName] = bool(t.researched);
+  }
+
+  // Workshop upgrades.
+  for (const name of WORKSHOP_NAMES) {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+    const u = g.workshop.get(name);
+    if (!u) continue;
+    s.info.workshop[name as WorkshopName] = bool(u.researched);
+  }
+
+  // Religion: religion upgrades, ziggurat structures, transcendence tier.
+  for (const name of RELIGION_UPGRADE_NAMES) {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+    const u = g.religion.getRU(name);
+    if (!u) continue;
+    s.info.religionUpgrades[name as ReligionUpgradeName] = bool(u.researched ?? u.val > 0);
+  }
+  for (const name of ZIGGURAT_NAMES) {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+    const z = g.religion.getZU(name);
+    if (!z) continue;
+    s.physical.zigguratStructures[name as ZigguratName] = num(z.val);
+  }
+  for (const name of TRANSCENDENCE_NAMES) {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+    const t = g.religion.getTU(name);
+    if (!t) continue;
+    s.info.transcendenceUpgrades[name as TranscendenceName] = num(t.val);
+  }
+
+  // Time / chronoforge / voidspace.
+  for (const name of CHRONOFORGE_NAMES) {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+    const c = g.time.getCFU(name);
+    if (!c) continue;
+    s.physical.chronoforge[name as ChronoforgeName] = num(c.val);
+  }
+  for (const name of VOIDSPACE_NAMES) {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+    const v = g.time.getVSU(name);
+    if (!v) continue;
+    s.physical.voidspace[name as VoidspaceName] = num(v.val);
+  }
+
+  // Space — per-planet building counts + space programs (one-time research).
+  for (const planet of PLANET_NAMES) {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any
+    const p = (g.space.planets as Any[])?.find((x: Any) => x.name === planet);
+    if (!p) continue;
+    for (const bname of PLANET_BUILDING_NAMES[planet]) {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-explicit-any
+      const b = (p.buildings as Any[]).find((x: Any) => x.name === bname);
+      if (!b) continue;
+      s.physical.spaceBuildings[planet][bname] = num(b.val);
+    }
+  }
+  for (const name of SPACE_PROGRAM_NAMES) {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any
+    const program = (g.space.programs as Any[])?.find((x: Any) => x.name === name);
+    if (!program) continue;
+    s.physical.spaceProgramsCompleted[name as SpaceProgramName] = bool(program.researched);
+  }
+
+  // Policies.
+  for (const name of POLICY_NAMES) {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+    const p = g.science.getPolicy(name);
+    if (!p) continue;
+    s.info.policies[name as PolicyName] = bool(p.researched);
+    s.info.policyBlocked[name as PolicyName] = bool(p.blocked);
+  }
+
+  // Diplomacy.
+  for (const civ of CIV_NAMES) {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any
+    const r = (g.diplomacy.races as Any[])?.find((x: Any) => x.name === civ);
+    if (!r) continue;
+    s.info.diplomacyDiscovered[civ as CivName] = bool(r.unlocked);
+    s.physical.embassies[civ as CivName] = num(r.embassyLevel);
+  }
+
+  // Kittens.
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+  const sim = g.village.sim;
+  if (sim) {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-explicit-any
+    const kittens: Any[] = sim.kittens ?? [];
+    s.physical.kittens.total = kittens.length;
+    let assigned = 0;
+    for (const k of kittens) {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+      const job = k.job as string | null | undefined;
+      if (job && JOB_NAMES.includes(job as JobName)) {
+        s.physical.kittens.jobs[job as JobName]++;
+        assigned++;
+      }
+    }
+    s.physical.kittens.freeKittens = kittens.length - assigned;
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+    const leader = sim.leader as Any;
+    if (leader && typeof leader.job === "string" && JOB_NAMES.includes(leader.job as JobName)) {
+      s.physical.kittens.leader = {
+        job: leader.job as JobName,
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+        trait: typeof leader.trait?.name === "string" ? leader.trait.name : "",
+        rank: num(leader.rank),
+        exp: num(leader.exp),
+      };
+    }
+  }
+
+  // Calendar.
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+  const cal = g.calendar;
+  if (cal) {
+    s.info.calendar.year = num(cal.year);
+    const season = num(cal.season);
+    s.info.calendar.season = (season % 4) as Season;
+    s.info.calendar.day = num(cal.day);
+    s.info.calendar.cycle = num(cal.cycle);
+    s.info.calendar.cycleYear = num(cal.cycleYear);
+    s.info.calendar.ticks = num(g.ticks);
+    const wRaw = (cal.weather as string | null | undefined) ?? "";
+    s.info.weather =
+      wRaw === "cold" || wRaw === "warm" || wRaw === "neutral" ? (wRaw as Weather) : "neutral";
+    s.info.festivalRemaining = num(cal.festivalDays);
+  }
+
+  // Religion accumulators / energy / happiness / paragon / karma.
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+  const rel = g.religion;
+  if (rel) {
+    s.info.faith = num(rel.faith);
+    s.info.apocrypha = num(rel.faithRatio ?? rel.tcratio);
+    s.info.praiseCount = num(rel.praiseCount);
+  }
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+  s.info.energy = num(g.workshop?.getEnergyDelta?.() ?? 0);
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call
+  s.info.happiness = num(g.village?.happiness, 1);
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+  s.info.paragon = num(g.resPool.get("paragon")?.value);
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+  s.info.karma = num(g.resPool.get("karma")?.value);
+
+  return s;
 }
