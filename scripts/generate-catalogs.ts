@@ -53,12 +53,25 @@ function entries(arr: any, categoryInScope = true): CatEntry[] {
     .filter((x: any) => typeof x?.name === "string")
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     .map((x: any) => {
+      // Some buildings carry their costs on a nested stage (e.g. library,
+      // pasture, ziggurat). Fall back to stages[0].prices when the top-level
+      // is missing.
       // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-      const raw: PriceEntry[] = (x.prices ?? x.cost ?? []) as PriceEntry[];
+      let raw: PriceEntry[] = (x.prices ?? x.cost ?? []) as PriceEntry[];
+      if ((!Array.isArray(raw) || raw.length === 0) && Array.isArray(x.stages) && x.stages[0]) {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+        raw = (x.stages[0].prices ?? []) as PriceEntry[];
+      }
       const basePrices = Array.isArray(raw)
         ? raw.map((p) => ({ name: String(p.name), val: Number(p.val) }))
         : [];
-      const priceRatio = typeof x.priceRatio === "number" ? (x.priceRatio as number) : 1;
+      // priceRatio also can live on the stage.
+      let priceRatio = typeof x.priceRatio === "number" ? (x.priceRatio as number) : 1;
+      if (priceRatio === 1 && Array.isArray(x.stages) && x.stages[0]) {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+        const stageRatio = x.stages[0].priceRatio;
+        if (typeof stageRatio === "number") priceRatio = stageRatio;
+      }
       return {
         name: x.name as string,
         inScope: categoryInScope && !hasParagonOrKarma(x),
