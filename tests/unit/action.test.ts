@@ -18,6 +18,8 @@ describe("Action discrimination", () => {
           return "wait";
         case "gather-catnip":
           return "gather-catnip";
+        case "refine-catnip":
+          return "refine-catnip";
         case "build":
           return `build ${a.building}`;
         case "build-ziggurat":

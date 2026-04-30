@@ -326,6 +326,13 @@ export function feasibilityReport(s: State, a: Action): FeasibilityReport {
       return { ok: true, reasons: [] };
     case "gather-catnip":
       return { ok: true, reasons: [] };
+    case "refine-catnip": {
+      const cost = s.info.workshop.advancedRefinement ? 50 : 100;
+      const have = s.physical.resources.catnip ?? 0;
+      return have >= cost
+        ? { ok: true, reasons: [] }
+        : { ok: false, reasons: [`insufficient catnip: ${have} < ${cost}`] };
+    }
     case "build":
       return checkBuild(s, a);
     case "build-ziggurat":

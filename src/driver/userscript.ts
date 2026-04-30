@@ -72,6 +72,8 @@ function renderPanel(lastAction: string, lastResult: string): void {
     .slice(0, 3)
     .map(([k, n]) => `${k}(${n})`)
     .join(" ");
+  const btn = (id: string, label: string, color = "#9ec0e0"): string =>
+    `<span id="${id}" style="cursor:pointer;color:${color};border:1px solid #555;padding:1px 6px;border-radius:3px;margin-right:4px;display:inline-block;margin-top:2px;">${label}</span>`;
   p.innerHTML = [
     `<b style="color:#7ec699">Kittens Autoplayer</b> &nbsp; ` +
       `<span id="ap-toggle" style="cursor:pointer;color:${running ? "#e58a8a" : "#7ec699"};">[${running ? "stop" : "start"}]</span>`,
@@ -81,14 +83,24 @@ function renderPanel(lastAction: string, lastResult: string): void {
     `result: <span style="color:#dcb47c">${lastResult}</span>`,
     `top kinds: ${topKinds || "—"}`,
     `errors: ${topErrors || "—"}`,
+    `<div style="margin-top:6px;">` +
+      btn("ap-state", "state") +
+      btn("ap-actions", "actions") +
+      btn("ap-goal", "goal") +
+      btn("ap-probe", "probe") +
+      btn("ap-step", "step", "#dcb47c") +
+      `</div>`,
   ].join("<br>");
-  const toggle = p.querySelector("#ap-toggle");
-  if (toggle) {
-    (toggle as HTMLElement).onclick = (): void => {
-      if (running) stop();
-      else start();
-    };
-  }
+  const wire = (id: string, fn: () => void): void => {
+    const el = p.querySelector(`#${id}`);
+    if (el) (el as HTMLElement).onclick = fn;
+  };
+  wire("ap-toggle", () => (running ? stop() : start()));
+  wire("ap-state", printState);
+  wire("ap-actions", printActions);
+  wire("ap-goal", printGoal);
+  wire("ap-probe", printProbe);
+  wire("ap-step", stepOnce);
 }
 
 function fmtAction(a: unknown): string {
@@ -105,6 +117,138 @@ function fmtAction(a: unknown): string {
 }
 
 let stopRequested = false;
+
+// -- Diagnostic helpers ---------------------------------------------------
+
+function safeExtract(): ReturnType<typeof extract> | null {
+  try {
+    return extract(pageWindow.gamePage);
+  } catch (e) {
+    console.error("[autoplayer] extract failed:", e);
+    return null;
+  }
+}
+
+function printState(): void {
+  const s = safeExtract();
+  if (!s) return;
+  const summary = {
+    calendar: s.info.calendar,
+    weather: s.info.weather,
+    resources: Object.fromEntries(
+      Object.entries(s.physical.resources).filter(([, v]) => v > 0),
+    ),
+    resourceCaps: Object.fromEntries(
+      Object.entries(s.physical.resourceCaps).filter(([, v]) => v !== Infinity && v > 0),
+    ),
+    buildings: Object.fromEntries(
+      Object.entries(s.physical.buildings).filter(([, v]) => v > 0),
+    ),
+    techsResearched: Object.entries(s.info.techs)
+      .filter(([, v]) => v)
+      .map(([k]) => k),
+    workshopResearched: Object.entries(s.info.workshop)
+      .filter(([, v]) => v)
+      .map(([k]) => k),
+    policiesAdopted: Object.entries(s.info.policies)
+      .filter(([, v]) => v)
+      .map(([k]) => k),
+    policiesBlocked: Object.entries(s.info.policyBlocked)
+      .filter(([, v]) => v)
+      .map(([k]) => k),
+    kittens: s.physical.kittens,
+    diplomacyDiscovered: Object.entries(s.info.diplomacyDiscovered)
+      .filter(([, v]) => v)
+      .map(([k]) => k),
+    embassies: Object.fromEntries(
+      Object.entries(s.physical.embassies).filter(([, v]) => v > 0),
+    ),
+    faith: s.info.faith,
+    apocrypha: s.info.apocrypha,
+    paragon: s.info.paragon,
+    karma: s.info.karma,
+    happiness: s.info.happiness,
+  };
+  console.log("[autoplayer] state:", summary);
+  console.log("[autoplayer] full state object:", s);
+}
+
+function printActions(): void {
+  const s = safeExtract();
+  if (!s) return;
+  const actions = enumerateFeasibleActions(s);
+  const byKind: Record<string, unknown[]> = {};
+  for (const a of actions) {
+    if (!byKind[a.kind]) byKind[a.kind] = [];
+    byKind[a.kind]!.push(a);
+  }
+  console.log(`[autoplayer] ${actions.length} feasible actions:`);
+  for (const [kind, list] of Object.entries(byKind)) {
+    console.log(`  ${kind} (${list.length}):`, list);
+  }
+}
+
+function printGoal(): void {
+  const s = safeExtract();
+  if (!s) return;
+  const r = goalReport(s);
+  console.log(`[autoplayer] goal satisfied: ${r.satisfied}`);
+  for (const [k, list] of Object.entries(r) as Array<[string, unknown]>) {
+    if (k === "satisfied") continue;
+    if (Array.isArray(list) && list.length > 0) {
+      console.log(`  ${k} (${list.length}):`, list);
+    }
+  }
+}
+
+function printProbe(): void {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const cls: any = pageWindow.classes;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const com: any = pageWindow.com;
+  const probe = {
+    "classes.ui.btn.BuildingBtnModernController":
+      typeof cls?.ui?.btn?.BuildingBtnModernController,
+    "com.nuclearunicorn.game.ui.BuildingStackableBtnController":
+      typeof com?.nuclearunicorn?.game?.ui?.BuildingStackableBtnController,
+    "com.nuclearunicorn.game.ui.TechButtonController":
+      typeof com?.nuclearunicorn?.game?.ui?.TechButtonController,
+    "com.nuclearunicorn.game.ui.UpgradeButtonController":
+      typeof com?.nuclearunicorn?.game?.ui?.UpgradeButtonController,
+    "com.nuclearunicorn.game.ui.ZigguratBtnController":
+      typeof com?.nuclearunicorn?.game?.ui?.ZigguratBtnController,
+    "com.nuclearunicorn.game.ui.ReligionBtnController":
+      typeof com?.nuclearunicorn?.game?.ui?.ReligionBtnController,
+    "classes.ui.PolicyBtnController": typeof cls?.ui?.PolicyBtnController,
+    "classes.ui.space.PlanetBuildingBtnController":
+      typeof cls?.ui?.space?.PlanetBuildingBtnController,
+    "classes.ui.time.ChronoforgeBtnController":
+      typeof cls?.ui?.time?.ChronoforgeBtnController,
+    "classes.ui.time.VoidSpaceBtnController":
+      typeof cls?.ui?.time?.VoidSpaceBtnController,
+    "classes.game.ui.GatherCatnipButtonController":
+      typeof cls?.game?.ui?.GatherCatnipButtonController,
+    "classes.game.ui.RefineCatnipButtonController":
+      typeof cls?.game?.ui?.RefineCatnipButtonController,
+  };
+  console.log("[autoplayer] controller probe (live page):", probe);
+}
+
+function stepOnce(): void {
+  const s = safeExtract();
+  if (!s) return;
+  const policy = makeRandomPolicy();
+  const a = policy(s);
+  console.log("[autoplayer] step: policy chose", a);
+  try {
+    if (a.kind !== "wait") {
+      apply(pageWindow.gamePage, a);
+      console.log("[autoplayer] step: applied OK");
+    }
+  } catch (e) {
+    console.error("[autoplayer] step failed:", e);
+  }
+}
 
 function start(): void {
   if (running) return;

@@ -27,6 +27,12 @@ export interface ActionGatherCatnip {
   kind: "gather-catnip";
 }
 
+// Refine 100 catnip (50 with advancedRefinement) → 1+ wood. The first way to
+// get wood before huts/kittens are available.
+export interface ActionRefineCatnip {
+  kind: "refine-catnip";
+}
+
 export interface ActionBuild {
   kind: "build";
   building: BuildingName;
@@ -143,6 +149,7 @@ export interface ActionSpaceLaunch {
 export type Action =
   | ActionWait
   | ActionGatherCatnip
+  | ActionRefineCatnip
   | ActionBuild
   | ActionBuildZiggurat
   | ActionBuildSpace

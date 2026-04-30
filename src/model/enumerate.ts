@@ -25,6 +25,9 @@ import {
 export function enumerateFeasibleActions(s: State): Action[] {
   const out: Action[] = [{ kind: "wait" }, { kind: "gather-catnip" }];
 
+  // Refine catnip if affordable.
+  if (feasible(s, { kind: "refine-catnip" })) out.push({ kind: "refine-catnip" });
+
   const tryAdd = (a: Action): void => {
     if (feasible(s, a)) out.push(a);
   };

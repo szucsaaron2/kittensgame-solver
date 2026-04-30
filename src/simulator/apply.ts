@@ -73,6 +73,8 @@ export function apply(g: Any, a: Action): void {
         return;
       case "gather-catnip":
         return applyGatherCatnip(g);
+      case "refine-catnip":
+        return applyRefineCatnip(g);
       case "build":
         return applyBuild(g, a);
       case "build-ziggurat":
@@ -152,6 +154,28 @@ function applyGatherCatnip(g: Any): void {
   const catnip = g.resPool.get("catnip");
   if (!catnip) throw new Error("no catnip resource");
   catnip.value = (catnip.value as number) + 1;
+}
+
+function applyRefineCatnip(g: Any): void {
+  const { classes } = ns();
+  const C = classes?.game?.ui?.RefineCatnipButtonController;
+  if (C) {
+    const cost = g.workshop?.get?.("advancedRefinement")?.researched ? 50 : 100;
+    const controller = new C(g);
+    const model = controller.fetchModel({ prices: [{ name: "catnip", val: cost }] });
+    controller.updateEnabled(model);
+    const result = controller.buyItem(model, null);
+    if (result?.itemBought !== true && result?.reason !== "item-is-free") {
+      throw new Error(`refine-catnip failed: ${result?.reason ?? "unknown"}`);
+    }
+    return;
+  }
+  // Fallback: call the manager method directly (this is what the button does).
+  if (typeof g.bld?.refineCatnip === "function") {
+    g.bld.refineCatnip();
+    return;
+  }
+  throw new Error("refine-catnip: no controller and no manager method");
 }
 
 // -- Building / construction -----------------------------------------------

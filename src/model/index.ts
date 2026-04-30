@@ -14,6 +14,7 @@ export type {
   ActionKind,
   ActionWait,
   ActionGatherCatnip,
+  ActionRefineCatnip,
   ActionBuild,
   ActionBuildZiggurat,
   ActionBuildSpace,
