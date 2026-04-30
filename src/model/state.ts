@@ -59,6 +59,18 @@ export interface CalendarState {
   ticks: number;
 }
 
+export interface UnlockState {
+  buildings: Record<BuildingName, boolean>;
+  techs: Record<TechName, boolean>;
+  workshop: Record<WorkshopName, boolean>;
+  religion: Record<ReligionUpgradeName, boolean>;
+  ziggurat: Record<ZigguratName, boolean>;
+  chronoforge: Record<ChronoforgeName, boolean>;
+  voidspace: Record<VoidspaceName, boolean>;
+  policies: Record<PolicyName, boolean>;
+  jobs: Record<JobName, boolean>;
+}
+
 export interface InformationalState {
   calendar: CalendarState;
   weather: Weather;
@@ -79,6 +91,7 @@ export interface InformationalState {
   happiness: number;
   paragon: number;
   karma: number;
+  unlocked: UnlockState;
 }
 
 // ===== Belief state B_t (empty for now) =====

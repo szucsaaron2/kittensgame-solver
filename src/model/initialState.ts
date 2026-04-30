@@ -81,6 +81,17 @@ export function initialState(): State {
       happiness: 1.0,
       paragon: 0,
       karma: 0,
+      unlocked: {
+        buildings: fillBool(BUILDING_NAMES, false),
+        techs: fillBool(TECH_NAMES, false),
+        workshop: fillBool(WORKSHOP_NAMES, false),
+        religion: fillBool(RELIGION_UPGRADE_NAMES, false),
+        ziggurat: fillBool(ZIGGURAT_NAMES, false),
+        chronoforge: fillBool(CHRONOFORGE_NAMES, false),
+        voidspace: fillBool(VOIDSPACE_NAMES, false),
+        policies: fillBool(POLICY_NAMES, false),
+        jobs: fillBool(JOB_NAMES, false),
+      },
     },
     belief: {},
   };

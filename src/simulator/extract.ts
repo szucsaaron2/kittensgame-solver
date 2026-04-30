@@ -59,40 +59,40 @@ export function extract(g: Any): State {
 
   // Buildings (bonfire / terrestrial).
   for (const name of BUILDING_NAMES) {
-     
     const b = g.bld.get(name);
     if (!b) continue;
     s.physical.buildings[name as BuildingName] = num(b.val);
+    s.info.unlocked.buildings[name as BuildingName] = bool(b.unlocked);
   }
 
   // Techs.
   for (const name of TECH_NAMES) {
-     
     const t = g.science.get(name);
     if (!t) continue;
     s.info.techs[name as TechName] = bool(t.researched);
+    s.info.unlocked.techs[name as TechName] = bool(t.unlocked);
   }
 
   // Workshop upgrades.
   for (const name of WORKSHOP_NAMES) {
-     
     const u = g.workshop.get(name);
     if (!u) continue;
     s.info.workshop[name as WorkshopName] = bool(u.researched);
+    s.info.unlocked.workshop[name as WorkshopName] = bool(u.unlocked);
   }
 
   // Religion: religion upgrades, ziggurat structures, transcendence tier.
   for (const name of RELIGION_UPGRADE_NAMES) {
-     
     const u = g.religion.getRU(name);
     if (!u) continue;
     s.info.religionUpgrades[name as ReligionUpgradeName] = bool(u.researched ?? u.val > 0);
+    s.info.unlocked.religion[name as ReligionUpgradeName] = bool(u.unlocked);
   }
   for (const name of ZIGGURAT_NAMES) {
-     
     const z = g.religion.getZU(name);
     if (!z) continue;
     s.physical.zigguratStructures[name as ZigguratName] = num(z.val);
+    s.info.unlocked.ziggurat[name as ZigguratName] = bool(z.unlocked);
   }
   for (const name of TRANSCENDENCE_NAMES) {
      
@@ -103,16 +103,16 @@ export function extract(g: Any): State {
 
   // Time / chronoforge / voidspace.
   for (const name of CHRONOFORGE_NAMES) {
-     
     const c = g.time.getCFU(name);
     if (!c) continue;
     s.physical.chronoforge[name as ChronoforgeName] = num(c.val);
+    s.info.unlocked.chronoforge[name as ChronoforgeName] = bool(c.unlocked);
   }
   for (const name of VOIDSPACE_NAMES) {
-     
     const v = g.time.getVSU(name);
     if (!v) continue;
     s.physical.voidspace[name as VoidspaceName] = num(v.val);
+    s.info.unlocked.voidspace[name as VoidspaceName] = bool(v.unlocked);
   }
 
   // Space — per-planet building counts + space programs (one-time research).
@@ -136,11 +136,11 @@ export function extract(g: Any): State {
 
   // Policies.
   for (const name of POLICY_NAMES) {
-     
     const p = g.science.getPolicy(name);
     if (!p) continue;
     s.info.policies[name as PolicyName] = bool(p.researched);
     s.info.policyBlocked[name as PolicyName] = bool(p.blocked);
+    s.info.unlocked.policies[name as PolicyName] = bool(p.unlocked);
   }
 
   // Diplomacy.
@@ -152,8 +152,13 @@ export function extract(g: Any): State {
     s.physical.embassies[civ as CivName] = num(r.embassyLevel);
   }
 
+  // Job unlock flags.
+  for (const j of JOB_NAMES) {
+    const job = (g.village.jobs as Any[] | undefined)?.find((x: Any) => x.name === j);
+    s.info.unlocked.jobs[j] = bool(job?.unlocked);
+  }
+
   // Kittens.
-   
   const sim = g.village.sim;
   if (sim) {
      
