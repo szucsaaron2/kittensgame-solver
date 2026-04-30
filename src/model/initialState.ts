@@ -82,6 +82,7 @@ export function initialState(): State {
       happiness: 1.0,
       paragon: 0,
       karma: 0,
+      craftRecipes: {},
       unlocked: {
         buildings: fillBool(BUILDING_NAMES, false),
         techs: fillBool(TECH_NAMES, false),

@@ -159,11 +159,20 @@ export function extract(g: Any): State {
     s.info.unlocked.jobs[j] = bool(job?.unlocked);
   }
 
-  // Craft unlock flags. Each craft recipe has its own runtime unlocked flag
-  // controlled by its prereq workshop upgrades.
+  // Craft unlock flags + recipe prices. The game's getCraftPrice returns
+  // post-discount prices (workshop upgrades reduce costs). Snapshot both so
+  // feasibility can stay pure.
   for (const c of CRAFT_NAMES) {
     const recipe = g.workshop?.getCraft?.(c);
     s.info.unlocked.crafts[c] = bool(recipe?.unlocked);
+    if (recipe) {
+      const priced = typeof g.workshop?.getCraftPrice === "function"
+        ? (g.workshop.getCraftPrice(recipe) as Array<{ name: string; val: number }>)
+        : (recipe.prices as Array<{ name: string; val: number }>);
+      s.info.craftRecipes[c] = {
+        prices: (priced ?? []).map((p) => ({ name: String(p.name), val: Number(p.val) })),
+      };
+    }
   }
 
   // Kittens.

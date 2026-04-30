@@ -72,6 +72,10 @@ export interface UnlockState {
   crafts: Record<string, boolean>;
 }
 
+export interface CraftRecipe {
+  prices: { name: string; val: number }[];
+}
+
 export interface InformationalState {
   calendar: CalendarState;
   weather: Weather;
@@ -93,6 +97,7 @@ export interface InformationalState {
   paragon: number;
   karma: number;
   unlocked: UnlockState;
+  craftRecipes: Record<string, CraftRecipe>;
 }
 
 // ===== Belief state B_t (empty for now) =====

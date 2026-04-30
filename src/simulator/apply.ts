@@ -378,10 +378,10 @@ function applyAssign(g: Any, a: ActionAssign): void {
   if (typeof g.village?.updateResourceProduction === "function") {
     g.village.updateResourceProduction();
   }
-  // Force the live UI to redraw. The village tab caches its job-count cells;
-  // a single g.render() doesn't always invalidate them. We call multiple
-  // refresh hooks defensively. Each is wrapped because in test (mocked dojo)
-  // these can throw — a UI refresh failing should never sink the assign call.
+  // Force the live village tab to redraw. The right hooks (per upstream
+  // village.js) are villageTab.updateTab() and requestCensusRefresh().
+  // Each call is wrapped because in test (mocked dojo) these throw — a UI
+  // refresh failing should never sink the assign itself.
   const safe = (fn: () => void): void => {
     try {
       fn();
@@ -389,11 +389,13 @@ function applyAssign(g: Any, a: ActionAssign): void {
       // ignore
     }
   };
-  // NOTE: do NOT call g.update() here — it advances tick logic which can
-  // kill kittens (starvation/sickness) inside the same call.
+  if (typeof g.villageTab?.updateTab === "function") safe(() => g.villageTab.updateTab());
+  if (typeof g.villageTab?.requestCensusRefresh === "function")
+    safe(() => g.villageTab.requestCensusRefresh());
   if (typeof g.ui?.render === "function") safe(() => g.ui.render());
   if (typeof g.render === "function") safe(() => g.render());
-  if (typeof g.villageTab?.render === "function") safe(() => g.villageTab.render());
+  // NOTE: do NOT call g.update() here — it advances tick logic which can
+  // kill kittens (starvation/sickness) inside the same call.
 }
 
 function applyEngineerAssign(g: Any, a: ActionEngineerAssign): void {

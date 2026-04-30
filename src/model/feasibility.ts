@@ -257,11 +257,16 @@ function checkCraft(s: State, a: ActionCraft): FeasibilityReport {
   if (a.item !== "wood" && (s.physical.buildings.workshop ?? 0) < 1) {
     reasons.push(`workshop building not yet built`);
   }
-  // Recipe must be unlocked at runtime (gated by per-recipe workshop upgrades:
-  // ship needs navigation, kerosene needs oilProcessing, thorium needs thorium
-  // tech, tMythril needs theology, etc.).
   if (a.item !== "wood" && !s.info.unlocked.crafts[a.item]) {
     reasons.push(`craft recipe ${a.item} not yet unlocked`);
+  }
+  // Resource cost check. The recipe's prices array is snapshotted at extract
+  // time (post any discount from workshop upgrades) and stored on
+  // s.info.craftRecipes[item].prices. Cost scales linearly with amount.
+  const recipe = s.info.craftRecipes[a.item];
+  if (recipe) {
+    const priced = recipe.prices.map((p) => ({ name: p.name, val: p.val * a.amount }));
+    affordCheck(s, priced, reasons);
   }
   return { ok: reasons.length === 0, reasons };
 }
