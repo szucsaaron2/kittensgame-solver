@@ -163,6 +163,7 @@ function checkReligionUpgrade(s: State, a: ActionReligionUpgrade): FeasibilityRe
 
 function checkPraise(s: State): FeasibilityReport {
   const reasons: string[] = [];
+  if (!s.info.techs.theology) reasons.push(`theology tech not researched`);
   if ((s.physical.resources.faith ?? 0) <= 0) reasons.push(`no faith to praise`);
   return { ok: reasons.length === 0, reasons };
 }
@@ -195,10 +196,25 @@ function checkTrade(s: State, a: ActionTrade): FeasibilityReport {
   const reasons: string[] = [];
   if (!s.info.diplomacyDiscovered[a.civ]) reasons.push(`civ ${a.civ} not discovered`);
   if (a.caravans < 1 || !Number.isInteger(a.caravans)) reasons.push(`bad caravan count`);
+  // Costs per caravan: catpower (50 base, post-discount), gold (15 base,
+  // post-discount), and a tribute resource consumed per caravan
+  // (race.buys[0]: e.g. iron 100 for sharks, wood 500 for griffins).
+  // Match upstream diplomacy.hasMultipleResources exactly.
   const cp = s.physical.resources.manpower ?? 0;
-  if (cp < 50 * a.caravans) reasons.push(`catpower < 50 per caravan`);
+  if (cp < s.info.tradeManpowerCost * a.caravans) {
+    reasons.push(`catpower < ${s.info.tradeManpowerCost} per caravan`);
+  }
   const gold = s.physical.resources.gold ?? 0;
-  if (gold < 15 * a.caravans) reasons.push(`gold < 15 per caravan`);
+  if (gold < s.info.tradeGoldCost * a.caravans) {
+    reasons.push(`gold < ${s.info.tradeGoldCost} per caravan`);
+  }
+  const tribute = s.info.tradeTribute[a.civ];
+  if (tribute) {
+    const have = (s.physical.resources as Record<string, number>)[tribute.name] ?? 0;
+    if (have < tribute.val * a.caravans) {
+      reasons.push(`${tribute.name} < ${tribute.val} per caravan`);
+    }
+  }
   return { ok: reasons.length === 0, reasons };
 }
 
@@ -307,13 +323,14 @@ function checkPolicy(s: State, a: ActionPolicy): FeasibilityReport {
 function checkTimeSkip(s: State, a: ActionTimeSkip): FeasibilityReport {
   const reasons: string[] = [];
   if (a.years < 1 || !Number.isInteger(a.years)) reasons.push(`years must be a positive integer`);
-  // Chronoforge required to time-skip; using temporalBattery as proxy for the
-  // chronoforge subsystem being available.
-  if ((s.physical.chronoforge.temporalBattery ?? 0) < 1) {
-    reasons.push(`chronoforge not available`);
+  // The Shatter TC button lives in the Time tab, which appears when the
+  // chronosphere building is built (and chronophysics tech is researched).
+  if (!s.info.techs.chronophysics) reasons.push(`chronophysics tech not researched`);
+  if ((s.physical.buildings.chronosphere ?? 0) < 1) reasons.push(`chronosphere not built`);
+  // 1 timeCrystal per year (upstream: prices [{name:"timeCrystal", val:1}]).
+  if ((s.physical.resources.timeCrystal ?? 0) < a.years) {
+    reasons.push(`time crystals < ${a.years}`);
   }
-  const tcCost = a.years * 10;
-  if ((s.physical.resources.timeCrystal ?? 0) < tcCost) reasons.push(`not enough time crystals`);
   return { ok: reasons.length === 0, reasons };
 }
 
@@ -323,6 +340,9 @@ function checkSpaceLaunch(s: State, a: ActionSpaceLaunch): FeasibilityReport {
   if (!meta) return { ok: false, reasons: [`unknown mission: ${a.mission}`] };
   if (!meta.inScope) reasons.push(`out of scope`);
   if (s.physical.spaceProgramsCompleted[a.mission]) reasons.push(`already launched`);
+  // Every space mission requires rocketry; deeper missions need their own
+  // tech prereqs which the game's `unlocked` flag captures dynamically.
+  if (!s.info.techs.rocketry) reasons.push(`rocketry tech not researched`);
   affordCheck(s, projectedCost(meta, 0), reasons);
   return { ok: reasons.length === 0, reasons };
 }

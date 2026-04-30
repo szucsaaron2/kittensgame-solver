@@ -77,8 +77,9 @@ describe("feasibility", () => {
     it("infeasible without faith", () => {
       expect(feasible(initialState(), { kind: "praise" })).toBe(false);
     });
-    it("feasible with faith", () => {
+    it("feasible with faith and theology tech", () => {
       const s = initialState();
+      s.info.techs.theology = true;
       s.physical.resources.faith = 10;
       expect(feasible(s, { kind: "praise" })).toBe(true);
     });

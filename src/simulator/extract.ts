@@ -164,6 +164,19 @@ export function extract(g: Any): State {
       name: String(p.name),
       val: Number(p.val) * coeff * ratio,
     }));
+    // Per-caravan tribute (race.buys[0]). Used by feasibility for `trade`.
+    const buys = (r.buys as Array<{ name: string; val: number }> | undefined) ?? [];
+    s.info.tradeTribute[civ as CivName] = buys[0]
+      ? { name: String(buys[0].name), val: Number(buys[0].val) }
+      : null;
+  }
+  // Per-caravan trade base costs (use the live game's getter so policy
+  // discounts are picked up).
+  if (typeof g.diplomacy?.getManpowerCost === "function") {
+    s.info.tradeManpowerCost = num(g.diplomacy.getManpowerCost(), 50);
+  }
+  if (typeof g.diplomacy?.getGoldCost === "function") {
+    s.info.tradeGoldCost = num(g.diplomacy.getGoldCost(), 15);
   }
 
   // Job unlock flags.

@@ -86,6 +86,11 @@ export function initialState(): State {
       embassyPrices: Object.fromEntries(
         CIV_NAMES.map((c) => [c, [] as { name: string; val: number }[]]),
       ) as unknown as State["info"]["embassyPrices"],
+      tradeTribute: Object.fromEntries(
+        CIV_NAMES.map((c) => [c, null]),
+      ) as unknown as State["info"]["tradeTribute"],
+      tradeManpowerCost: 50,
+      tradeGoldCost: 15,
       unlocked: {
         buildings: fillBool(BUILDING_NAMES, false),
         techs: fillBool(TECH_NAMES, false),

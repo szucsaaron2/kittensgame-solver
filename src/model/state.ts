@@ -99,6 +99,11 @@ export interface InformationalState {
   unlocked: UnlockState;
   craftRecipes: Record<string, CraftRecipe>;
   embassyPrices: Record<CivName, { name: string; val: number }[]>;
+  // Per-civ tribute resource consumed per caravan (race.buys[0] in upstream).
+  tradeTribute: Record<CivName, { name: string; val: number } | null>;
+  // Per-caravan catpower / gold cost (post-discount). Same for every civ.
+  tradeManpowerCost: number;
+  tradeGoldCost: number;
 }
 
 // ===== Belief state B_t (empty for now) =====

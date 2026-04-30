@@ -90,6 +90,7 @@ function renderPanel(lastAction: string, lastResult: string): void {
       btn("ap-probe", "probe") +
       btn("ap-step", "step", "#dcb47c") +
       btn("ap-assign", "assign", "#c69ec0") +
+      btn("ap-verify", "verify", "#dcb47c") +
       `</div>`,
   ].join("<br>");
   const wire = (id: string, fn: () => void): void => {
@@ -103,6 +104,7 @@ function renderPanel(lastAction: string, lastResult: string): void {
   wire("ap-probe", printProbe);
   wire("ap-step", stepOnce);
   wire("ap-assign", assignAllUI);
+  wire("ap-verify", verifyFeasibility);
 }
 
 function fmtAction(a: unknown): string {
@@ -283,6 +285,126 @@ function assignAllUI(): void {
     console.log("[autoplayer] post-assign kittens:", after?.physical.kittens);
   } catch (e) {
     console.error("[autoplayer] assignAll failed:", e);
+  }
+}
+
+/**
+ * Live cross-check: for every action our enumeration calls feasible, ask the
+ * live game whether IT considers the action available + affordable. Log
+ * disagreements. Catches predicate bugs the random run would hit only by
+ * chance.
+ */
+function verifyFeasibility(): void {
+  const s = safeExtract();
+  if (!s) return;
+  const g = pageWindow.gamePage;
+  const actions = enumerateFeasibleActions(s);
+
+  interface Mismatch {
+    action: string;
+    weSay: string;
+    gameSays: string;
+    note?: string;
+  }
+  const mismatches: Mismatch[] = [];
+  const summary: Record<string, number> = {};
+
+  // Helpers to ask the game directly.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const tryHasResources = (entry: any): boolean | null => {
+    try {
+      const prices = (entry?.prices ?? entry?.cost ?? []) as Array<{
+        name: string;
+        val: number;
+      }>;
+      if (!Array.isArray(prices)) return null;
+       
+      return Boolean(g.resPool.hasRes(prices));
+    } catch {
+      return null;
+    }
+  };
+
+  for (const a of actions) {
+    summary[a.kind] = (summary[a.kind] ?? 0) + 1;
+    let gameSays = "?";
+    let entry: unknown = null;
+    try {
+      switch (a.kind) {
+        case "build":
+           
+          entry = g.bld.get(a.building);
+          break;
+        case "research":
+           
+          entry = g.science.get(a.tech);
+          break;
+        case "workshop":
+           
+          entry = g.workshop.get(a.upgrade);
+          break;
+        case "religion-upgrade":
+           
+          entry = g.religion.getRU(a.upgrade);
+          break;
+        case "build-ziggurat":
+           
+          entry = g.religion.getZU(a.structure);
+          break;
+        case "build-chronoforge":
+           
+          entry = g.time.getCFU(a.building);
+          break;
+        case "build-voidspace":
+           
+          entry = g.time.getVSU(a.building);
+          break;
+        case "policy":
+           
+          entry = g.science.getPolicy(a.policy);
+          break;
+        case "craft": {
+           
+          const recipe = g.workshop.getCraft(a.item);
+           
+          const prices = g.workshop.getCraftPrice(recipe);
+           
+          entry = { prices, unlocked: recipe?.unlocked };
+          break;
+        }
+        default:
+          // No live affordability check for this kind — trust feasibility.
+          continue;
+      }
+       
+      const unlocked = (entry as { unlocked?: boolean })?.unlocked;
+      const hasRes = tryHasResources(entry);
+       
+      const researched = (entry as { researched?: boolean })?.researched;
+      gameSays = `unlocked=${String(unlocked)} hasRes=${String(hasRes)} researched=${String(researched)}`;
+      // We expect: feasible iff (unlocked && hasRes && !researched).
+      const expected = unlocked === true && hasRes === true && researched !== true;
+      if (!expected) {
+        mismatches.push({
+          action: fmtAction(a),
+          weSay: "feasible",
+          gameSays,
+          note: "we say feasible but game disagrees",
+        });
+      }
+    } catch (e) {
+      mismatches.push({
+        action: fmtAction(a),
+        weSay: "feasible",
+        gameSays: `threw: ${e instanceof Error ? e.message : String(e)}`,
+      });
+    }
+  }
+
+  console.log(`[autoplayer] verify: ${actions.length} feasible actions, ${mismatches.length} mismatches`);
+  console.log("  by kind:", summary);
+  if (mismatches.length > 0) {
+    console.warn("  mismatches:", mismatches);
   }
 }
 
