@@ -13,6 +13,7 @@ export type {
   Action,
   ActionKind,
   ActionWait,
+  ActionGatherCatnip,
   ActionBuild,
   ActionBuildZiggurat,
   ActionBuildSpace,

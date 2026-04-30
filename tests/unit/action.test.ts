@@ -16,6 +16,8 @@ describe("Action discrimination", () => {
       switch (a.kind) {
         case "wait":
           return "wait";
+        case "gather-catnip":
+          return "gather-catnip";
         case "build":
           return `build ${a.building}`;
         case "build-ziggurat":

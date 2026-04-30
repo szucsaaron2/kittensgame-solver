@@ -23,7 +23,7 @@ import {
 } from "@/model/catalogs";
 
 export function enumerateFeasibleActions(s: State): Action[] {
-  const out: Action[] = [{ kind: "wait" }];
+  const out: Action[] = [{ kind: "wait" }, { kind: "gather-catnip" }];
 
   const tryAdd = (a: Action): void => {
     if (feasible(s, a)) out.push(a);

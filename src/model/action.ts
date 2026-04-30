@@ -19,6 +19,14 @@ export interface ActionWait {
   ticks?: number;
 }
 
+// The bootstrap action: click "Gather catnip" once. Always feasible. Adds 1
+// catnip (modulo bonuses). Without this, a fresh game with 0 kittens has no
+// way to escape its starting state since passive catnip trickle is too slow
+// to ever afford the first field.
+export interface ActionGatherCatnip {
+  kind: "gather-catnip";
+}
+
 export interface ActionBuild {
   kind: "build";
   building: BuildingName;
@@ -134,6 +142,7 @@ export interface ActionSpaceLaunch {
 
 export type Action =
   | ActionWait
+  | ActionGatherCatnip
   | ActionBuild
   | ActionBuildZiggurat
   | ActionBuildSpace

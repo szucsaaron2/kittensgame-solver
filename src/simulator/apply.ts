@@ -61,6 +61,8 @@ export function apply(g: Any, a: Action): void {
     switch (a.kind) {
       case "wait":
         return;
+      case "gather-catnip":
+        return applyGatherCatnip(g);
       case "build":
         return applyBuild(g, a);
       case "build-ziggurat":
@@ -121,6 +123,27 @@ export function apply(g: Any, a: Action): void {
   }
 }
 
+// -- Gather catnip ---------------------------------------------------------
+
+function applyGatherCatnip(g: Any): void {
+  const { classes } = ns();
+  const C = classes?.game?.ui?.GatherCatnipButtonController;
+  if (C) {
+    const controller = new C(g);
+    const model = controller.fetchModel({});
+    controller.updateEnabled(model);
+    const result = controller.buyItem(model, null);
+    if (result?.itemBought !== true && result?.reason !== "item-is-free") {
+      throw new Error(`gather-catnip failed: ${result?.reason ?? "unknown"}`);
+    }
+    return;
+  }
+  // Fallback: directly add 1 catnip — the underlying button literally does this.
+  const catnip = g.resPool.get("catnip");
+  if (!catnip) throw new Error("no catnip resource");
+  catnip.value = (catnip.value as number) + 1;
+}
+
 // -- Building / construction -----------------------------------------------
 
 function buyViaController(g: Any, ControllerCtor: Any, modelInit: Any): void {
@@ -134,9 +157,17 @@ function buyViaController(g: Any, ControllerCtor: Any, modelInit: Any): void {
 }
 
 function applyBuild(g: Any, a: ActionBuild): void {
-  const { classes } = ns();
-  const C = classes?.ui?.btn?.BuildingBtnModernController;
-  if (!C) throw new Error("BuildingBtnModernController not available");
+  const { classes, com } = ns();
+  // Live game and jsdom expose different paths. Try modern path first,
+  // then fall back to the base stackable / non-stackable controllers
+  // (which are what the modern controller extends).
+  const C =
+    classes?.ui?.btn?.BuildingBtnModernController ??
+    classes?.ui?.btn?.StagingBldBtnController ??
+    com?.nuclearunicorn?.game?.ui?.BuildingStackableBtnController ??
+    com?.nuclearunicorn?.game?.ui?.BuildingNotStackableBtnController ??
+    com?.nuclearunicorn?.game?.ui?.BuildingBtnController;
+  if (!C) throw new Error("no building controller class available");
   buyViaController(g, C, { key: a.building, building: a.building });
 }
 

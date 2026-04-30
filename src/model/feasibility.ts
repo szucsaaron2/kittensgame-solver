@@ -324,6 +324,8 @@ export function feasibilityReport(s: State, a: Action): FeasibilityReport {
   switch (a.kind) {
     case "wait":
       return { ok: true, reasons: [] };
+    case "gather-catnip":
+      return { ok: true, reasons: [] };
     case "build":
       return checkBuild(s, a);
     case "build-ziggurat":

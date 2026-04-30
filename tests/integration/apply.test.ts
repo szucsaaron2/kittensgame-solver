@@ -149,6 +149,22 @@ describe("apply: wait", () => {
   });
 });
 
+describe("apply: gather-catnip", () => {
+  let h: GameHandle | undefined;
+  afterEach(async () => {
+    await h?.teardown();
+    h = undefined;
+  });
+
+  it("adds catnip from a fresh game (the bootstrap action)", () => {
+    h = setupGame();
+    const before = h.gamePage.resPool.get("catnip").value as number;
+    apply(h.gamePage, { kind: "gather-catnip" });
+    const after = h.gamePage.resPool.get("catnip").value as number;
+    expect(after).toBeGreaterThan(before);
+  });
+});
+
 describe("apply: error wrapping", () => {
   it("wraps errors in ApplyError", () => {
     expect(() => apply({}, { kind: "build", building: "field" })).toThrow();
