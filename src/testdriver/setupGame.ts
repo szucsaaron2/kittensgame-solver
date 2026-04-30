@@ -32,7 +32,7 @@ export interface SetupOptions {
 type AnyObj = Record<string, any>;
 
 let bootedOnce = false;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+ 
 let cachedNamespaces: { com: AnyObj; classes: AnyObj; mixin: AnyObj; dojo: AnyObj } | null = null;
 
 function bootOnce(): NonNullable<typeof cachedNamespaces> {
@@ -42,7 +42,7 @@ function bootOnce(): NonNullable<typeof cachedNamespaces> {
   const dom = new JSDOM("<!doctype html><html><body></body></html>", {
     url: "http://localhost/",
   });
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   const g = globalThis as AnyObj;
   const setIfWritable = (key: string, value: unknown): void => {
     try {
@@ -64,33 +64,33 @@ function bootOnce(): NonNullable<typeof cachedNamespaces> {
   setIfWritable("Node", dom.window.Node);
 
   // 2. Mocked dojo namespace + declare.
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+   
   const createNamespace = requireGame("./test/declare");
   const namespace: AnyObj = { com: {}, classes: {}, mixin: {} };
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment
+   
   const dojoDeclare = createNamespace(namespace);
   g.com = namespace.com;
   g.classes = namespace.classes;
   g.mixin = namespace.mixin;
   // The game looks up `window["classes"]["managers"]`, so the namespaces must be
   // visible on the dom.window proxy too.
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+   
   (dom.window as AnyObj).com = namespace.com;
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+   
   (dom.window as AnyObj).classes = namespace.classes;
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+   
   (dom.window as AnyObj).mixin = namespace.mixin;
 
   const dojo: AnyObj = {
     version: { minor: 6 },
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+     
     declare: dojoDeclare.declare,
     destroy: () => undefined,
     empty: () => undefined,
     byId: () => undefined,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     forEach: (array: any, predicate: (v: any, i: any) => void) => {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access
+       
       for (const i in array) predicate(array[i], i);
     },
     clone: function clone(m: unknown): unknown {
@@ -99,7 +99,7 @@ function bootOnce(): NonNullable<typeof cachedNamespaces> {
     },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     hitch: (ctx: any, method: any) => {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
+       
       return method.bind(ctx);
     },
     connect: () => undefined,
@@ -111,13 +111,13 @@ function bootOnce(): NonNullable<typeof cachedNamespaces> {
   g.dojo = dojo;
 
   // 3. jQuery, React, LZString, dropbox, system.
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+   
   g.React = requireGame("./lib/react.min.js");
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+   
   g.$ = requireGame("./lib/jQuery");
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+   
   g.$.ajax = () => ({ done() { return this; }, fail() { return this; } });
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+   
   g.LZString = requireGame("./lib/lz-string.js");
   requireGame("./lib/dropbox_v2.js");
   requireGame("./lib/system.js");
@@ -186,42 +186,42 @@ export function setupGame(opts: SetupOptions = {}): GameHandle {
   // also captured.
   const seed = opts.seed ?? 0;
   const rng = seedrandom(String(seed));
-  // eslint-disable-next-line @typescript-eslint/unbound-method
+   
   const originalRandom = Math.random;
   Math.random = (): number => rng();
 
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call
+   
   const gamePage = new ns.com.nuclearunicorn.game.ui.GamePage();
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   const g = globalThis as AnyObj;
   g.gamePage = gamePage;
   g.game = gamePage;
 
   // resetState wires up internal building/effect bookkeeping.
   // It needs a UI; provide a minimal stub if classes.ui.UISystem isn't available.
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment
+   
   const UISystem = ns.classes?.ui?.UISystem;
   if (UISystem) {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+     
     gamePage.setUI(new UISystem("gameContainerId"));
   } else {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+     
     gamePage.setUI({
-      // eslint-disable-next-line @typescript-eslint/no-empty-function
+       
       render: () => {},
-      // eslint-disable-next-line @typescript-eslint/no-empty-function
+       
       update: () => {},
-      // eslint-disable-next-line @typescript-eslint/no-empty-function
+       
       displayAutosave: () => {},
-      // eslint-disable-next-line @typescript-eslint/no-empty-function
+       
       onLoaded: () => {},
-      // eslint-disable-next-line @typescript-eslint/no-empty-function
+       
       attachTooltip: () => {},
-      // eslint-disable-next-line @typescript-eslint/no-empty-function
+       
       hideTooltip: () => {},
     });
   }
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+   
   gamePage.resetState();
 
   return {
@@ -229,12 +229,12 @@ export function setupGame(opts: SetupOptions = {}): GameHandle {
     window: g.window,
     tick(n: number = 1): void {
       for (let i = 0; i < n; i++) {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+         
         gamePage.tick();
       }
     },
     async teardown(): Promise<void> {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       const gg = globalThis as AnyObj;
       gg.gamePage = undefined;
       gg.game = undefined;

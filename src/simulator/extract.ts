@@ -49,7 +49,7 @@ export function extract(g: Any): State {
 
   // Resources.
   for (const name of RESOURCE_NAMES) {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+     
     const r = g.resPool.get(name);
     if (!r) continue;
     s.physical.resources[name as ResourceName] = num(r.value);
@@ -59,7 +59,7 @@ export function extract(g: Any): State {
 
   // Buildings (bonfire / terrestrial).
   for (const name of BUILDING_NAMES) {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+     
     const b = g.bld.get(name);
     if (!b) continue;
     s.physical.buildings[name as BuildingName] = num(b.val);
@@ -67,7 +67,7 @@ export function extract(g: Any): State {
 
   // Techs.
   for (const name of TECH_NAMES) {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+     
     const t = g.science.get(name);
     if (!t) continue;
     s.info.techs[name as TechName] = bool(t.researched);
@@ -75,7 +75,7 @@ export function extract(g: Any): State {
 
   // Workshop upgrades.
   for (const name of WORKSHOP_NAMES) {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+     
     const u = g.workshop.get(name);
     if (!u) continue;
     s.info.workshop[name as WorkshopName] = bool(u.researched);
@@ -83,19 +83,19 @@ export function extract(g: Any): State {
 
   // Religion: religion upgrades, ziggurat structures, transcendence tier.
   for (const name of RELIGION_UPGRADE_NAMES) {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+     
     const u = g.religion.getRU(name);
     if (!u) continue;
     s.info.religionUpgrades[name as ReligionUpgradeName] = bool(u.researched ?? u.val > 0);
   }
   for (const name of ZIGGURAT_NAMES) {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+     
     const z = g.religion.getZU(name);
     if (!z) continue;
     s.physical.zigguratStructures[name as ZigguratName] = num(z.val);
   }
   for (const name of TRANSCENDENCE_NAMES) {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+     
     const t = g.religion.getTU(name);
     if (!t) continue;
     s.info.transcendenceUpgrades[name as TranscendenceName] = num(t.val);
@@ -103,13 +103,13 @@ export function extract(g: Any): State {
 
   // Time / chronoforge / voidspace.
   for (const name of CHRONOFORGE_NAMES) {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+     
     const c = g.time.getCFU(name);
     if (!c) continue;
     s.physical.chronoforge[name as ChronoforgeName] = num(c.val);
   }
   for (const name of VOIDSPACE_NAMES) {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+     
     const v = g.time.getVSU(name);
     if (!v) continue;
     s.physical.voidspace[name as VoidspaceName] = num(v.val);
@@ -117,18 +117,18 @@ export function extract(g: Any): State {
 
   // Space — per-planet building counts + space programs (one-time research).
   for (const planet of PLANET_NAMES) {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any
+     
     const p = (g.space.planets as Any[])?.find((x: Any) => x.name === planet);
     if (!p) continue;
     for (const bname of PLANET_BUILDING_NAMES[planet]) {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-explicit-any
+       
       const b = (p.buildings as Any[]).find((x: Any) => x.name === bname);
       if (!b) continue;
       s.physical.spaceBuildings[planet][bname] = num(b.val);
     }
   }
   for (const name of SPACE_PROGRAM_NAMES) {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any
+     
     const program = (g.space.programs as Any[])?.find((x: Any) => x.name === name);
     if (!program) continue;
     s.physical.spaceProgramsCompleted[name as SpaceProgramName] = bool(program.researched);
@@ -136,7 +136,7 @@ export function extract(g: Any): State {
 
   // Policies.
   for (const name of POLICY_NAMES) {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+     
     const p = g.science.getPolicy(name);
     if (!p) continue;
     s.info.policies[name as PolicyName] = bool(p.researched);
@@ -145,7 +145,7 @@ export function extract(g: Any): State {
 
   // Diplomacy.
   for (const civ of CIV_NAMES) {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any
+     
     const r = (g.diplomacy.races as Any[])?.find((x: Any) => x.name === civ);
     if (!r) continue;
     s.info.diplomacyDiscovered[civ as CivName] = bool(r.unlocked);
@@ -153,15 +153,15 @@ export function extract(g: Any): State {
   }
 
   // Kittens.
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+   
   const sim = g.village.sim;
   if (sim) {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-explicit-any
+     
     const kittens: Any[] = sim.kittens ?? [];
     s.physical.kittens.total = kittens.length;
     let assigned = 0;
     for (const k of kittens) {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+       
       const job = k.job as string | null | undefined;
       if (job && JOB_NAMES.includes(job as JobName)) {
         s.physical.kittens.jobs[job as JobName]++;
@@ -169,12 +169,12 @@ export function extract(g: Any): State {
       }
     }
     s.physical.kittens.freeKittens = kittens.length - assigned;
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+     
     const leader = sim.leader as Any;
     if (leader && typeof leader.job === "string" && JOB_NAMES.includes(leader.job as JobName)) {
       s.physical.kittens.leader = {
         job: leader.job as JobName,
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+         
         trait: typeof leader.trait?.name === "string" ? leader.trait.name : "",
         rank: num(leader.rank),
         exp: num(leader.exp),
@@ -183,7 +183,7 @@ export function extract(g: Any): State {
   }
 
   // Calendar.
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+   
   const cal = g.calendar;
   if (cal) {
     s.info.calendar.year = num(cal.year);
@@ -200,20 +200,20 @@ export function extract(g: Any): State {
   }
 
   // Religion accumulators / energy / happiness / paragon / karma.
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+   
   const rel = g.religion;
   if (rel) {
     s.info.faith = num(rel.faith);
     s.info.apocrypha = num(rel.faithRatio ?? rel.tcratio);
     s.info.praiseCount = num(rel.praiseCount);
   }
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+   
   s.info.energy = num(g.workshop?.getEnergyDelta?.() ?? 0);
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call
+   
   s.info.happiness = num(g.village?.happiness, 1);
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+   
   s.info.paragon = num(g.resPool.get("paragon")?.value);
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+   
   s.info.karma = num(g.resPool.get("karma")?.value);
 
   return s;

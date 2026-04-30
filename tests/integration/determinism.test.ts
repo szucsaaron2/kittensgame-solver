@@ -11,20 +11,20 @@ interface Snapshot {
 }
 
 function snapshot(handle: ReturnType<typeof setupGame>): Snapshot {
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call
+   
   const catnip = handle.gamePage.resPool.get("catnip").value as number;
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call
+   
   const catpower = handle.gamePage.resPool.get("manpower").value as number;
   return {
     catnip,
     catpower,
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+     
     year: handle.gamePage.calendar.year as number,
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+     
     season: handle.gamePage.calendar.season as number,
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+     
     day: handle.gamePage.calendar.day as number,
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment
+     
     ticks: handle.gamePage.ticks as number,
   };
 }

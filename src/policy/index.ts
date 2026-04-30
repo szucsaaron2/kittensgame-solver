@@ -1,1 +1,1 @@
-export {};
+export { noopPolicy } from "./noop";

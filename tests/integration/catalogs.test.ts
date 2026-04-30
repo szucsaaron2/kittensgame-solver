@@ -13,7 +13,7 @@ describe("catalogs", () => {
     handle = setupGame();
     const mismatches = verifyCatalogs(handle.gamePage);
     if (mismatches.length > 0) {
-      // eslint-disable-next-line no-console
+       
       console.error("Catalog mismatches:", JSON.stringify(mismatches, null, 2));
     }
     expect(mismatches).toEqual([]);
