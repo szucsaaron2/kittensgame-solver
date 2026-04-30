@@ -63,3 +63,80 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
+
+---
+
+## 5. Project-Specific Knowledge
+
+**Read [DIARY.MD](DIARY.MD) for chronological context** — what plans have been executed, which bugs have been found, what was tried and discarded. New chats should consult it before assuming anything about the codebase's history.
+
+### 5.1 Layout
+
+```
+src/
+├── model/                  Pure types and predicates. No gamePage access.
+│   ├── catalogs/           AUTO-GENERATED from the live game by scripts/generate-catalogs.ts.
+│   ├── action.ts           Discriminated Action union (29 variants).
+│   ├── state.ts            State = { physical, info, belief }.
+│   ├── feasibility.ts      Pure feasible(s, a) predicate.
+│   ├── enumerate.ts        Discrete-payload action enumeration.
+│   ├── goal.ts             Pure goal(s) predicate.
+│   └── invariants.ts       checkInvariants(s).
+├── simulator/              The bridge to the live game. Allowed to touch gamePage.
+│   ├── extract.ts          extract(gamePage) → State. Reads only.
+│   ├── apply.ts            apply(gamePage, action). Mutates the game.
+│   └── verifyCatalogs.ts   Diff our catalog names against the live game.
+├── driver/                 Loop runner + browser userscript.
+├── policy/                 Action selection. Currently noop + random.
+└── testdriver/             Boot the game in Node (mirrors upstream test/setup.js).
+kittensgame-master/         Vendored game source, treated read-only.
+scripts/                    Generators + ad-hoc inspection helpers.
+tests/{unit,integration,property}/   Vitest tests.
+```
+
+### 5.2 Architectural rules to never break
+
+- **`extract` is the only place that reads gamePage.** Feasibility, goal, invariants, and enumerate must be pure functions of State.
+- **`apply` is the only place that mutates gamePage.** Tests, scripts, and the driver should not bypass it.
+- **Catalogs are generated, never hand-edited.** `scripts/generate-catalogs.ts` writes them. Re-run after any change to `kittensgame-master/`. Headers say `AUTO-GENERATED`.
+- **Use the upstream high-level wrapper, not the low-level `sim.X`.** `village.assignJob`, `village.unassignJob`, controller `buyItem` — these update display fields and trigger UI refreshes that the underlying methods skip.
+
+### 5.3 Boot harness gotchas
+
+- **Use `test/setup.js` style boot, not JSDOM(index.html).** Upstream's dojo XHR loader doesn't work in jsdom; the maintainers themselves abandoned that path. We mock dojo and `require()` modules directly. See `src/testdriver/setupGame.ts`.
+- **In Tampermonkey, controller classes live on `unsafeWindow`, not `globalThis`.** `apply.ts`'s `ns()` helper handles this — try `unsafeWindow` first, fall back to `globalThis` for jsdom.
+- **`g.update()` advances tick logic** (kittens can starve, etc.). Never call it from `apply` — only from the driver loop.
+
+### 5.4 Adding a new action variant
+
+1. Add interface to `src/model/action.ts`, add to the `Action` union.
+2. Re-export from `src/model/index.ts`.
+3. Add the case to `feasibility.ts` (must compile — `assertNever` flags missing cases).
+4. Add the case to `apply.ts`. Prefer the upstream controller (`buyViaController`); fall back to manager method (`g.bld.X`) if the controller chain breaks under standalone instantiation.
+5. Add to `enumerate.ts` if it has a discrete payload.
+6. Add the case to the exhaustiveness switch in `tests/unit/action.test.ts`.
+7. Write integration tests for both the apply happy path and at least one feasibility-rejection case.
+
+### 5.5 Common failure modes (and what fixed each)
+
+| Symptom | Root cause | Fix |
+|---|---|---|
+| `apply` succeeds but UI shows nothing | Used `sim.X` instead of `village.X` | Route through high-level wrapper |
+| `apply` says `cannot-afford` despite feasibility | Cost lives on `entry.stages[0].prices` | Generator falls through to stages[0] |
+| Controller `buyItem` throws "Cannot read property of undefined (reading 'apply')" | Standalone-instantiated controller fails dojo's `inherited(arguments)` chain | Call manager method directly (e.g. `g.bld.refineCatnip()`) |
+| Controller class missing in Tampermonkey | Looked it up via `globalThis.classes` | Use `unsafeWindow.classes` |
+| Action stays "feasible" forever and errors on apply | Hardcoded cost differs from upstream | Snapshot live cost from gamePage at extract time, compare in feasibility |
+| Goal predicate unsatisfiable | Required every policy researched, but pairs mutually block | Satisfied = researched OR blocked |
+
+### 5.6 Live debugging
+
+The browser userscript exposes a panel and console hooks:
+- `[start]/[stop]` — run random policy at 2s steps
+- `[state]/[actions]/[goal]/[probe]/[step]/[assign]/[verify]` — inspection buttons
+- `window.autoplayer.{start,stop,assign,assignAll,state,actions,stats}` — programmatic access
+
+`[verify]` is the most powerful: cross-checks every enumerated action against the live game's own affordability/unlock flags. Use it when fixing predicate bugs.
+
+### 5.7 When new actions/concepts come from live testing
+
+The live-test cycle has been finding ~1 bug per session. The pattern is: run, watch `stats.errors`, fix the predicate or apply path, repeat. Don't try to be exhaustive in advance — let the runs surface what's broken.
