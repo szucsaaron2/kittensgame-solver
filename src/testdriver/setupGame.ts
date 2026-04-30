@@ -9,6 +9,7 @@
 import { JSDOM } from "jsdom";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
+import seedrandom from "seedrandom";
 
 const VENDOR_DIR = resolve("kittensgame-master");
 const requireGame = createRequire(resolve(VENDOR_DIR, "package.json"));
@@ -177,8 +178,17 @@ function bootOnce(): NonNullable<typeof cachedNamespaces> {
 }
 
 export function setupGame(opts: SetupOptions = {}): GameHandle {
-  void opts; // seed/saveString hooks land in Phase 3.
   const ns = bootOnce();
+
+  // Seeded RNG: override Math.random so all subsequent game logic is deterministic.
+  // We override globalThis.Math.random because the require()-loaded modules share
+  // this global. Set it BEFORE constructing GamePage so init-time randomness is
+  // also captured.
+  const seed = opts.seed ?? 0;
+  const rng = seedrandom(String(seed));
+  // eslint-disable-next-line @typescript-eslint/unbound-method
+  const originalRandom = Math.random;
+  Math.random = (): number => rng();
 
   // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call
   const gamePage = new ns.com.nuclearunicorn.game.ui.GamePage();
@@ -228,6 +238,7 @@ export function setupGame(opts: SetupOptions = {}): GameHandle {
       const gg = globalThis as AnyObj;
       gg.gamePage = undefined;
       gg.game = undefined;
+      Math.random = originalRandom;
       await Promise.resolve();
     },
   };
