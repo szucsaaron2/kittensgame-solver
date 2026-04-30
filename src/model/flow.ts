@@ -95,6 +95,7 @@ export function applyActionToFlow(s: State, a: Action): State {
         consumption: { ...s.info.flow.consumption },
         catnipSeasonalFactor: s.info.flow.catnipSeasonalFactor,
         energyNet: s.info.flow.energyNet,
+        catnipPerFarmer: s.info.flow.catnipPerFarmer,
       },
     },
   };

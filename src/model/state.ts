@@ -100,6 +100,12 @@ export interface FlowSnapshot {
    * Mirrors gamePage.workshop.getEnergyDelta() at extract time.
    */
   energyNet: number;
+  /**
+   * Catnip production attributable to one farmer at the current multiplier
+   * stack and current season+weather. Used by the JobAssignment subsystem
+   * to project how many farmers are needed for winter survival.
+   */
+  catnipPerFarmer: number;
 }
 
 export interface InformationalState {

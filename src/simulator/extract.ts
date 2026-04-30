@@ -305,6 +305,27 @@ export function extract(g: Any): State {
   );
   s.info.flow.energyNet = s.info.energy;
 
+  // Per-farmer catnip rate at current multipliers + current season+weather.
+  // Source: village.js farmer base = 1.0/tick (village.js:32), modulated by
+  // happiness (village.js:538), skill, leader bonus, and the same seasonal
+  // factor as fields. We derive it from the engine's village resource map
+  // when at least one farmer is active; otherwise fall back to
+  // base × seasonalFactor × happiness, ignoring skill/leader contributions.
+  const farmerCount = num(s.physical.kittens.jobs.farmer, 0);
+  if (farmerCount > 0) {
+    const villageCatnip = num(g.village?.getResProduction?.()?.catnip, NaN);
+    if (Number.isFinite(villageCatnip) && villageCatnip > 0) {
+      s.info.flow.catnipPerFarmer = villageCatnip / farmerCount;
+    } else {
+      s.info.flow.catnipPerFarmer =
+        1.0 * s.info.flow.catnipSeasonalFactor * Math.max(0.25, s.info.happiness);
+    }
+  } else {
+    s.info.flow.catnipPerFarmer =
+      1.0 * s.info.flow.catnipSeasonalFactor * Math.max(0.25, s.info.happiness);
+  }
+
+
    
   s.info.happiness = num(g.village?.happiness, 1);
    

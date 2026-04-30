@@ -114,6 +114,46 @@ The Tampermonkey panel grew over the session. Current buttons:
 
 ---
 
+## Session 5 — Layered policy pipeline (Phases 0–6)
+
+**Goal:** lay down the 4-layer policy architecture (NetFlowGuard / Reflexes / Subsystems / Strategic) as scaffolding so each layer can land independently. Replace the random Layer-3 fallback piecemeal as reflexes / subsystems / scorer come online.
+
+### What landed
+
+Six commits, each leaves the autoplayer end-to-end runnable:
+
+- **Phase 0 (`7e3703f`)** — pipeline plumbing: `runPipeline(s, ctx)`, REFLEXES/SUBSYSTEMS empty registries, `[trace]` panel button. Behavior unchanged.
+- **Phase 1 (`21bea1f`)** — `info.flow` snapshot from engine's `getResourcePerTick`, catnip seasonal projection (`netFlowAt`). Guard still identity. New Appendix A in `Kittens Game model.MD` with file:line citations.
+- **Phase 2 (`8cceef3`)** — Guard activated. Per-building flow deltas in `flowDeltas.ts` for smelter/calciner/magneto/reactor/factory/accelerator/chronosphere/biolab/oilWell/quarry/field. Margin schedule per spec. "Veto only when this action is the cause" rule prevents freeze-everything failure mode. Random fallback now goes through `guardActions`.
+- **Phase 3 (`f...`)** — trivial reflexes: observe / hunt / praise / festival.
+- **Phase 4** — refine-catnip reflex with winter-survival buffer (500-tick conservative approximation).
+- **Phase 5** — narrow catpower-overflow trade reflex (first-feasible civ; civ-strategy belongs to Layer 3).
+- **Phase 6** — JobAssignment subsystem. Pure `chooseJobs(s)`: binary-search the farmer floor that keeps catnip ≥ 0 in winter+cold; reserve 1 hunter post-archery; even-distribute the rest down a phase-keyed priority ladder. Trigger: season change OR kitten delta OR new-job-unlocked.
+
+### Plan deviations
+
+- **Energy is tracked outside the resource maps** (`flow.energyNet`, separate from `flow.perTick/production/consumption`). Energy is a flow, not a stockable resource, and `ResourceName` doesn't include it. Cleaner than wedging it into the typed map.
+- **Conservative simplifications in `flowDeltas`**: static base rates only, no workshop/religion/policy ratio multipliers on consumer production, no conditional upgrade bonuses (smelter+coalFurnace, smelter+goldOre, etc.), no stage-1 buildings (solarFarm, hydroPlant, dataCenter). Underestimates production from consumers — correct safety bias for the guard.
+- **`promote-leader` reflex deferred** to a later phase: it needs a manuscript-cost projection we haven't snapshotted.
+- **Trade overflow uses first-feasible civ**, not a smarter pick. Strategic civ-selection (titanium-from-zebras, blueprints-from-spiders, etc.) is intentionally Layer 3.
+
+### Gotchas discovered
+
+- `ResourceName` does not include `energy` — it's tracked in `info.energy` (a flow). When trying to add energy to the per-resource flow maps, TypeScript caught it. Resolved by adding `flow.energyNet` as a separate scalar.
+- The "veto only when action is the cause" rule was needed: without it, any state already in deficit (e.g., wood net = 0 < 0.1 margin) would block every action including recovery actions.
+- `catnipPerFarmer` derivation needs a fallback for the 0-farmer bootstrap case (use `1.0 × seasonalFactor × happiness`, with happiness clamped to ≥ 0.25 for the worst-case happiness floor in upstream).
+- The current Phase-1 `applyActionToFlow` shallow-copies the snapshot; when adding new fields to `FlowSnapshot` (`catnipPerFarmer` in Phase 6), the copy must be updated too. Caught by typecheck.
+
+### Test count
+
+199 tests passing at end of Phase 6 (was 115 at start of Session 5). All phases lint + typecheck + build green.
+
+### Ready for next phase
+
+Phase 7 onward goes back to Layer-3 design (the strategic policy). The Layer 0/1/2 substrate is now sufficient to make a non-completion-aware run survive without bricking, freeing Layer 3 to focus on goal-directed decisions.
+
+---
+
 ## Current state
 
 - **103-105 tests passing** (count fluctuates as actions are added/removed).
