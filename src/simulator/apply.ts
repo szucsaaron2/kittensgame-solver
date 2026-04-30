@@ -93,6 +93,8 @@ export function apply(g: Any, a: Action): void {
         return applyReligionUpgrade(g, a);
       case "praise":
         return applyPraise(g);
+      case "send-explorers":
+        return applySendExplorers(g);
       case "refine-tears":
         return applyRefineTears(g, a);
       case "refine-tc":
@@ -117,8 +119,6 @@ export function apply(g: Any, a: Action): void {
         return applyHunt(g);
       case "observe":
         return applyObserve(g);
-      case "share-knowledge":
-        return applyShareKnowledge(g);
       case "festival":
         return applyFestival(g);
       case "policy":
@@ -378,6 +378,10 @@ function applyAssign(g: Any, a: ActionAssign): void {
   if (typeof g.village?.updateResourceProduction === "function") {
     g.village.updateResourceProduction();
   }
+  // Force the live UI (village tab) to redraw — without this, kitten
+  // assignments are correctly stored in k.job but the visible counts in the
+  // game's tab don't refresh until the next tick.
+  if (typeof g.render === "function") g.render();
 }
 
 function applyEngineerAssign(g: Any, a: ActionEngineerAssign): void {
@@ -452,16 +456,22 @@ function applyObserve(g: Any): void {
   throw new Error("no observe method available");
 }
 
-function applyShareKnowledge(g: Any): void {
-  // Share-knowledge with leviathans; depends on diplomacy state.
-  if (typeof g.diplomacy.unlockRandomRace === "function") {
-    // Not the right method, fall through.
+function applySendExplorers(g: Any): void {
+  // Cost is 1000 catpower. The button calls diplomacy.unlockRandomRace().
+  const cp = g.resPool?.get?.("manpower");
+  if (!cp || (cp.value as number) < 1000) {
+    throw new Error("send-explorers: catpower < 1000");
   }
-  if (typeof g.diplomacy.shareKnowledge === "function") {
-    g.diplomacy.shareKnowledge();
+  cp.value -= 1000;
+  if (typeof g.diplomacy?.unlockRandomRace === "function") {
+    const race = g.diplomacy.unlockRandomRace();
+    // The game refunds 950 catpower on failure.
+    if (!race) cp.value += 950;
     return;
   }
-  throw new Error("share-knowledge method not available");
+  // No-op fallback — nothing else to do.
+  cp.value += 1000; // refund since we couldn't actually do anything
+  throw new Error("send-explorers: diplomacy.unlockRandomRace not available");
 }
 
 function applyFestival(g: Any): void {

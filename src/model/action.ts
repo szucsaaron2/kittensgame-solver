@@ -33,6 +33,12 @@ export interface ActionRefineCatnip {
   kind: "refine-catnip";
 }
 
+// Send explorers: 1000 catpower, attempts to discover a new race (nagas →
+// zebras → spiders → dragons → ...). On failure refunds 950 catpower.
+export interface ActionSendExplorers {
+  kind: "send-explorers";
+}
+
 export interface ActionBuild {
   kind: "build";
   building: BuildingName;
@@ -123,9 +129,6 @@ export interface ActionHunt {
 export interface ActionObserve {
   kind: "observe";
 }
-export interface ActionShareKnowledge {
-  kind: "share-knowledge";
-}
 export interface ActionFestival {
   kind: "festival";
 }
@@ -150,6 +153,7 @@ export type Action =
   | ActionWait
   | ActionGatherCatnip
   | ActionRefineCatnip
+  | ActionSendExplorers
   | ActionBuild
   | ActionBuildZiggurat
   | ActionBuildSpace
@@ -171,7 +175,6 @@ export type Action =
   | ActionCraft
   | ActionHunt
   | ActionObserve
-  | ActionShareKnowledge
   | ActionFestival
   | ActionPolicy
   | ActionTimeSkip

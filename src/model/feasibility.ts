@@ -254,6 +254,11 @@ function checkCraft(s: State, a: ActionCraft): FeasibilityReport {
   const reasons: string[] = [];
   if (!CRAFT_NAMES.includes(a.item as CraftName)) reasons.push(`unknown craft: ${a.item}`);
   if (a.amount < 1 || !Number.isInteger(a.amount)) reasons.push(`bad amount`);
+  // Crafting (other than wood-via-refine) requires the workshop building to
+  // exist. Wood crafting goes through refine-catnip, not this action.
+  if (a.item !== "wood" && (s.physical.buildings.workshop ?? 0) < 1) {
+    reasons.push(`workshop building not yet built`);
+  }
   return { ok: reasons.length === 0, reasons };
 }
 
@@ -267,13 +272,6 @@ function checkObserve(s: State): FeasibilityReport {
   return s.info.astronomicalEvent
     ? { ok: true, reasons: [] }
     : { ok: false, reasons: [`no astronomical event`] };
-}
-
-function checkShareKnowledge(s: State): FeasibilityReport {
-  const reasons: string[] = [];
-  // Share-knowledge requires diplomacy — culture must be > 0 and zebras discovered (BLS quest).
-  if ((s.physical.resources.culture ?? 0) <= 0) reasons.push(`no culture`);
-  return { ok: reasons.length === 0, reasons };
 }
 
 function checkFestival(s: State): FeasibilityReport {
@@ -333,6 +331,15 @@ export function feasibilityReport(s: State, a: Action): FeasibilityReport {
         ? { ok: true, reasons: [] }
         : { ok: false, reasons: [`insufficient catnip: ${have} < ${cost}`] };
     }
+    case "send-explorers": {
+      const reasons: string[] = [];
+      if ((s.physical.resources.manpower ?? 0) < 1000) reasons.push(`catpower < 1000`);
+      // Need archery tech (catpower exists) + at least one race left to discover.
+      if (!s.info.techs.archery) reasons.push(`archery tech not researched`);
+      const allDiscovered = Object.values(s.info.diplomacyDiscovered).every((v) => v);
+      if (allDiscovered) reasons.push(`all civilizations already discovered`);
+      return { ok: reasons.length === 0, reasons };
+    }
     case "build":
       return checkBuild(s, a);
     case "build-ziggurat":
@@ -375,8 +382,6 @@ export function feasibilityReport(s: State, a: Action): FeasibilityReport {
       return checkHunt(s);
     case "observe":
       return checkObserve(s);
-    case "share-knowledge":
-      return checkShareKnowledge(s);
     case "festival":
       return checkFestival(s);
     case "policy":

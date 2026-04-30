@@ -20,6 +20,8 @@ describe("Action discrimination", () => {
           return "gather-catnip";
         case "refine-catnip":
           return "refine-catnip";
+        case "send-explorers":
+          return "explore";
         case "build":
           return `build ${a.building}`;
         case "build-ziggurat":
@@ -62,8 +64,6 @@ describe("Action discrimination", () => {
           return "hunt";
         case "observe":
           return "observe";
-        case "share-knowledge":
-          return "sk";
         case "festival":
           return "fest";
         case "policy":

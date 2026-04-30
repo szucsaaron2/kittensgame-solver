@@ -20,7 +20,9 @@ import {
   CIV_NAMES,
   POLICY_NAMES,
   SPACE_PROGRAM_NAMES,
+  CRAFT_NAMES,
 } from "@/model/catalogs";
+import type { CraftName } from "@/model/catalogs";
 
 export function enumerateFeasibleActions(s: State): Action[] {
   const out: Action[] = [{ kind: "wait" }, { kind: "gather-catnip" }];
@@ -51,11 +53,24 @@ export function enumerateFeasibleActions(s: State): Action[] {
   tryAdd({ kind: "praise" });
   tryAdd({ kind: "hunt" });
   tryAdd({ kind: "observe" });
-  tryAdd({ kind: "share-knowledge" });
   tryAdd({ kind: "festival" });
   tryAdd({ kind: "promote-leader" });
   tryAdd({ kind: "refine-tears" });
   tryAdd({ kind: "refine-tc" });
+  tryAdd({ kind: "send-explorers" });
+
+  // Crafting: only enumerate craft actions if the workshop building is up.
+  // (Without workshop, crafts are gated; only "wood" via refine-catnip works
+  // earlier, and that's already covered by ActionRefineCatnip.)
+  const hasWorkshop = (s.physical.buildings.workshop ?? 0) >= 1;
+  if (hasWorkshop) {
+    for (const item of CRAFT_NAMES) {
+      // Skip "wood" since refine-catnip is the dedicated path; "wood" via
+      // workshop is the same recipe.
+      if (item === "wood") continue;
+      tryAdd({ kind: "craft", item: item as CraftName, amount: 1 });
+    }
+  }
 
   // Diplomacy.
   for (const civ of CIV_NAMES) {
