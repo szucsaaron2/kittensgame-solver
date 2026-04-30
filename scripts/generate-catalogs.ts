@@ -1,6 +1,19 @@
 /**
  * Boot the game and write catalog files to src/model/catalogs/.
  * Re-run after upgrading kittensgame-master/.
+ *
+ * inScope semantics: an entry is `inScope: true` iff
+ *   (a) its `prices` field contains no `paragon` or `karma` entry, AND
+ *   (b) its subsystem isn't categorically reset-gated.
+ *
+ * Categorically-OOS subsystems: prestigePerks (paragon), transcendenceUpgrades
+ * (require transcendenceTier > 0 which is reset-only), voidUpgrades (require
+ * void resource which is post-reset). Cryptotheology is a single gateway tech,
+ * not a separate metadata array — the tech itself is in-scope; what it unlocks
+ * is in transcendenceUpgrades.
+ *
+ * If you add a new catalog whose entries are reset-gated by mechanism (not by
+ * direct paragon/karma cost), set its category-flag to false in the call below.
  */
 import { setupGame } from "@/testdriver/setupGame";
 import { writeFileSync, mkdirSync } from "node:fs";
