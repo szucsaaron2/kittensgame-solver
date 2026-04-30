@@ -4,6 +4,7 @@ import { huntReflex } from "./hunt";
 import { praiseReflex } from "./praise";
 import { festivalReflex } from "./festival";
 import { refineCatnipReflex } from "./refineCatnip";
+import { tradeOverflowReflex } from "./tradeOverflow";
 
 /**
  * Layer 1 reflexes, in priority order. The first reflex whose `fire(s)`
@@ -23,6 +24,10 @@ import { refineCatnipReflex } from "./refineCatnip";
 export const REFLEXES: NamedReflex[] = [
   { name: "auto-observe", fire: observeReflex },
   { name: "auto-hunt", fire: huntReflex },
+  // auto-trade-overflow runs *after* hunt: hunt drains catpower toward gold/
+  // furs first; trade is the fallback drain when hunt isn't available or
+  // didn't bring us below cap.
+  { name: "auto-trade-overflow", fire: tradeOverflowReflex },
   { name: "auto-praise", fire: praiseReflex },
   { name: "auto-refine-catnip", fire: refineCatnipReflex },
   { name: "auto-festival", fire: festivalReflex },
