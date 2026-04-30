@@ -15,6 +15,7 @@ import {
   JOB_NAMES,
   PLANET_NAMES,
   PLANET_BUILDING_NAMES,
+  CRAFT_NAMES,
 } from "@/model/catalogs";
 
 function fillNumber<K extends string>(keys: readonly K[], v: number): Record<K, number> {
@@ -91,6 +92,7 @@ export function initialState(): State {
         voidspace: fillBool(VOIDSPACE_NAMES, false),
         policies: fillBool(POLICY_NAMES, false),
         jobs: fillBool(JOB_NAMES, false),
+        crafts: fillBool(CRAFT_NAMES, false),
       },
     },
     belief: {},

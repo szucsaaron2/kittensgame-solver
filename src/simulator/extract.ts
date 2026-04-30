@@ -16,6 +16,7 @@ import {
   JOB_NAMES,
   PLANET_NAMES,
   PLANET_BUILDING_NAMES,
+  CRAFT_NAMES,
 } from "@/model/catalogs";
 import type {
   ResourceName,
@@ -156,6 +157,13 @@ export function extract(g: Any): State {
   for (const j of JOB_NAMES) {
     const job = (g.village.jobs as Any[] | undefined)?.find((x: Any) => x.name === j);
     s.info.unlocked.jobs[j] = bool(job?.unlocked);
+  }
+
+  // Craft unlock flags. Each craft recipe has its own runtime unlocked flag
+  // controlled by its prereq workshop upgrades.
+  for (const c of CRAFT_NAMES) {
+    const recipe = g.workshop?.getCraft?.(c);
+    s.info.unlocked.crafts[c] = bool(recipe?.unlocked);
   }
 
   // Kittens.

@@ -69,6 +69,7 @@ export interface UnlockState {
   voidspace: Record<VoidspaceName, boolean>;
   policies: Record<PolicyName, boolean>;
   jobs: Record<JobName, boolean>;
+  crafts: Record<string, boolean>;
 }
 
 export interface InformationalState {

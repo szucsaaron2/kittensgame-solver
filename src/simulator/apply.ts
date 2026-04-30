@@ -378,10 +378,22 @@ function applyAssign(g: Any, a: ActionAssign): void {
   if (typeof g.village?.updateResourceProduction === "function") {
     g.village.updateResourceProduction();
   }
-  // Force the live UI (village tab) to redraw — without this, kitten
-  // assignments are correctly stored in k.job but the visible counts in the
-  // game's tab don't refresh until the next tick.
-  if (typeof g.render === "function") g.render();
+  // Force the live UI to redraw. The village tab caches its job-count cells;
+  // a single g.render() doesn't always invalidate them. We call multiple
+  // refresh hooks defensively. Each is wrapped because in test (mocked dojo)
+  // these can throw — a UI refresh failing should never sink the assign call.
+  const safe = (fn: () => void): void => {
+    try {
+      fn();
+    } catch {
+      // ignore
+    }
+  };
+  // NOTE: do NOT call g.update() here — it advances tick logic which can
+  // kill kittens (starvation/sickness) inside the same call.
+  if (typeof g.ui?.render === "function") safe(() => g.ui.render());
+  if (typeof g.render === "function") safe(() => g.render());
+  if (typeof g.villageTab?.render === "function") safe(() => g.villageTab.render());
 }
 
 function applyEngineerAssign(g: Any, a: ActionEngineerAssign): void {

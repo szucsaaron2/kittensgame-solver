@@ -254,10 +254,14 @@ function checkCraft(s: State, a: ActionCraft): FeasibilityReport {
   const reasons: string[] = [];
   if (!CRAFT_NAMES.includes(a.item as CraftName)) reasons.push(`unknown craft: ${a.item}`);
   if (a.amount < 1 || !Number.isInteger(a.amount)) reasons.push(`bad amount`);
-  // Crafting (other than wood-via-refine) requires the workshop building to
-  // exist. Wood crafting goes through refine-catnip, not this action.
   if (a.item !== "wood" && (s.physical.buildings.workshop ?? 0) < 1) {
     reasons.push(`workshop building not yet built`);
+  }
+  // Recipe must be unlocked at runtime (gated by per-recipe workshop upgrades:
+  // ship needs navigation, kerosene needs oilProcessing, thorium needs thorium
+  // tech, tMythril needs theology, etc.).
+  if (a.item !== "wood" && !s.info.unlocked.crafts[a.item]) {
+    reasons.push(`craft recipe ${a.item} not yet unlocked`);
   }
   return { ok: reasons.length === 0, reasons };
 }
