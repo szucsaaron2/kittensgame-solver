@@ -67,6 +67,24 @@ describe("goal predicate", () => {
     expect(goalReport(s).unsatisfiedPolicies).toContain(inScope);
   });
 
+  it("accepts a realistic policy state where mutually-exclusive policies are blocked", () => {
+    // In the real game, picking liberty permanently blocks tradition (and
+    // vice versa). The goal must therefore accept blocked policies as
+    // satisfied; otherwise the goal is unsatisfiable.
+    const s = winningState();
+    s.info.policies.liberty = true;
+    s.info.policies.tradition = false;
+    s.info.policyBlocked.tradition = true;
+    expect(goal(s)).toBe(true);
+  });
+
+  it("rejects a state where a policy is neither researched nor blocked", () => {
+    const s = winningState();
+    s.info.policies.liberty = false;
+    s.info.policyBlocked.liberty = false;
+    expect(goal(s)).toBe(false);
+  });
+
   it("ignores civs without a tiered pact", () => {
     const s = winningState();
     const civWithoutPact = CIV_NAMES.find((c) => (PACT_TIERS_MAX[c] ?? 0) === 0);

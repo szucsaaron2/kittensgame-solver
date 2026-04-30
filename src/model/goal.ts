@@ -83,9 +83,17 @@ export function goalReport(s: State): GoalReport {
     }
   }
 
-  const unsatisfiedPolicies = inScopeKeys(POLICY_META).filter(
-    (n) => !(s.info.policies[n as PolicyName] ?? false),
-  );
+  // A policy clause is satisfied iff it has been researched OR has been
+  // permanently blocked by a mutually-exclusive policy. The game's policy graph
+  // contains pairs/groups (liberty/tradition, monarchy/authocracy/republic, ...)
+  // where picking one flips `blocked: true` on the others — those then become
+  // unreachable, so the goal cannot require them to be researched.
+  const unsatisfiedPolicies = inScopeKeys(POLICY_META).filter((n) => {
+    const policy = n as PolicyName;
+    const researched = s.info.policies[policy] ?? false;
+    const blocked = s.info.policyBlocked[policy] ?? false;
+    return !researched && !blocked;
+  });
 
   const unsatisfiedPacts = CIV_NAMES.filter((c) => (PACT_TIERS_MAX[c] ?? 0) > 0).filter(
     (c) => (s.info.pactTiers[c as CivName] ?? 0) < (PACT_TIERS_MAX[c] ?? 0),

@@ -141,26 +141,10 @@ function applyBuild(g: Any, a: ActionBuild): void {
 }
 
 function applyBuildZiggurat(g: Any, a: ActionBuildZiggurat): void {
-  const { classes } = ns();
-  // Ziggurats are religion 'transforms' in this codebase.
-  const C = classes?.ui?.religion?.TransformBtnController;
-  if (C) {
-    buyViaController(g, C, { id: a.structure });
-    return;
-  }
-  // Direct manager fallback.
-  const meta = g.religion.getZU(a.structure);
-  if (!meta) throw new Error(`unknown ziggurat: ${a.structure}`);
-  // Replicate cost-deduction + increment.
-  for (const p of (meta.prices ?? []) as Array<{ name: string; val: number }>) {
-    const ratio = (meta.priceRatio as number | undefined) ?? 1;
-    const cost = p.val * Math.pow(ratio, (meta.val as number | undefined) ?? 0);
-    const res = g.resPool.get(p.name);
-    if (!res || res.value < cost) throw new Error(`cannot afford ${p.name}`);
-    res.value -= cost;
-  }
-  meta.val = ((meta.val as number | undefined) ?? 0) + 1;
-  meta.on = ((meta.on as number | undefined) ?? 0) + 1;
+  const { com } = ns();
+  const C = com?.nuclearunicorn?.game?.ui?.ZigguratBtnController;
+  if (!C) throw new Error("ZigguratBtnController not available");
+  buyViaController(g, C, { id: a.structure });
 }
 
 function applyBuildSpace(g: Any, a: ActionBuildSpace): void {
@@ -201,22 +185,10 @@ function applyWorkshop(g: Any, a: ActionWorkshop): void {
 }
 
 function applyReligionUpgrade(g: Any, a: ActionReligionUpgrade): void {
-  const { classes } = ns();
-  const C = classes?.ui?.religion?.RUBtnController ?? classes?.ui?.religion?.TransformBtnController;
-  if (C) {
-    buyViaController(g, C, { id: a.upgrade });
-    return;
-  }
-  // Fallback: direct mutation.
-  const meta = g.religion.getRU(a.upgrade);
-  if (!meta) throw new Error(`unknown religion upgrade: ${a.upgrade}`);
-  for (const p of (meta.prices ?? []) as Array<{ name: string; val: number }>) {
-    const res = g.resPool.get(p.name);
-    if (!res || res.value < p.val) throw new Error(`cannot afford ${p.name}`);
-    res.value -= p.val;
-  }
-  meta.researched = true;
-  meta.val = ((meta.val as number | undefined) ?? 0) + 1;
+  const { com } = ns();
+  const C = com?.nuclearunicorn?.game?.ui?.ReligionBtnController;
+  if (!C) throw new Error("ReligionBtnController not available");
+  buyViaController(g, C, { id: a.upgrade });
 }
 
 // -- Religion flow ---------------------------------------------------------

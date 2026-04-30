@@ -67,6 +67,49 @@ describe("apply: workshop", () => {
   });
 });
 
+describe("apply: religion-upgrade", () => {
+  let h: GameHandle | undefined;
+  afterEach(async () => {
+    await h?.teardown();
+    h = undefined;
+  });
+
+  it("flips researched flag and deducts faith for solarchant", () => {
+    h = setupGame();
+    // solarchant requires the religion subsystem; we mark it unlocked + give
+    // faith. The upgrade costs 100 faith.
+    h.gamePage.religion.getRU("solarchant").unlocked = true;
+    h.gamePage.resPool.get("faith").value = 500;
+    apply(h.gamePage, { kind: "religion-upgrade", upgrade: "solarchant" });
+    const after = extract(h.gamePage);
+    expect(after.physical.resources.faith).toBeLessThan(500);
+    // Verify the controller (not direct mutation) ran: val should increment.
+    expect(h.gamePage.religion.getRU("solarchant").val).toBeGreaterThan(0);
+  });
+});
+
+describe("apply: build-ziggurat", () => {
+  let h: GameHandle | undefined;
+  afterEach(async () => {
+    await h?.teardown();
+    h = undefined;
+  });
+
+  it("deducts ivory + tears and increments unicornTomb count", () => {
+    h = setupGame();
+    h.gamePage.religion.getZU("unicornTomb").unlocked = true;
+    h.gamePage.resPool.get("ivory").value = 1000;
+    h.gamePage.resPool.get("tears").value = 50;
+    const ivoryBefore = h.gamePage.resPool.get("ivory").value as number;
+    const tearsBefore = h.gamePage.resPool.get("tears").value as number;
+    apply(h.gamePage, { kind: "build-ziggurat", structure: "unicornTomb" });
+    const after = extract(h.gamePage);
+    expect(after.physical.zigguratStructures.unicornTomb).toBeGreaterThan(0);
+    expect(h.gamePage.resPool.get("ivory").value).toBeLessThan(ivoryBefore);
+    expect(h.gamePage.resPool.get("tears").value).toBeLessThan(tearsBefore);
+  });
+});
+
 describe("apply: praise", () => {
   let h: GameHandle | undefined;
   afterEach(async () => {
