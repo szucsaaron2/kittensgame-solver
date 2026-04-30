@@ -1,4 +1,4 @@
-import { initialState } from "@/model";
+import { initialState, catnipSeasonalFactor } from "@/model";
 import type { State, Season, Weather } from "@/model";
 import {
   RESOURCE_NAMES,
@@ -257,6 +257,53 @@ export function extract(g: Any): State {
   }
    
   s.info.energy = num(g.workshop?.getEnergyDelta?.() ?? 0);
+
+  // Per-tick flow snapshot. Read from the engine's own perTick getter so we
+  // inherit whatever multipliers are live, then split production / consumption
+  // for resources whose seasonal projection we care about (currently only
+  // catnip).
+  for (const name of RESOURCE_NAMES) {
+    const r = g.resPool.get(name);
+    if (!r) continue;
+    const net =
+      typeof g.getResourcePerTick === "function"
+        ? num(g.getResourcePerTick(name, true))
+        : 0;
+    s.info.flow.perTick[name as ResourceName] = net;
+  }
+  // Catnip split: consumption is season-independent so we can derive
+  // production = net + consumption. Source: village.js:9 catnipPerKitten=-0.85,
+  // game.js:3312-3322 demand-ratio + happiness extra.
+  const kittenCount = num(g.village?.sim?.kittens?.length, 0);
+  const catnipPerKittenBase = 0.85;
+  const demandRatio = num(g.getEffect?.("catnipDemandRatio"), 0); // negative
+  let catnipConsumption = kittenCount * catnipPerKittenBase * (1 + demandRatio);
+  // Happiness > 1 increases consumption (anarchy: ignores freeKittens carve-out).
+  const hap = num(g.village?.happiness, 1);
+  if (hap > 1 && kittenCount > 0) {
+    const consumptionRatio = num(g.getEffect?.("hapinnessConsumptionRatio"), 0);
+    const happinessExtra = Math.max(hap * (1 + consumptionRatio) - 1, 0);
+    const workerRatioGlobal = num(
+      g.getEffect?.("catnipDemandWorkerRatioGlobal"),
+      0,
+    );
+    const freeKittens = num(g.village?.sim?.freeKittens, 0);
+    const carveOut = kittenCount > 0 ? 1 - freeKittens / kittenCount : 1;
+    catnipConsumption +=
+      catnipConsumption * happinessExtra * (1 + workerRatioGlobal) * carveOut;
+  }
+  // Buildings consume catnip too (barn/brewery via catnipPerTickCon). Pull
+  // these out of the engine if exposed.
+  const bldCatnipCon = num(g.getEffect?.("catnipPerTickCon"), 0);
+  if (bldCatnipCon < 0) catnipConsumption += -bldCatnipCon;
+  s.info.flow.consumption.catnip = catnipConsumption;
+  s.info.flow.production.catnip =
+    (s.info.flow.perTick.catnip ?? 0) + catnipConsumption;
+  s.info.flow.catnipSeasonalFactor = catnipSeasonalFactor(
+    s.info.calendar.season,
+    s.info.weather,
+  );
+
    
   s.info.happiness = num(g.village?.happiness, 1);
    

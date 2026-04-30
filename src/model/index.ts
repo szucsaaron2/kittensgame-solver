@@ -48,4 +48,14 @@ export { checkInvariants } from "./invariants";
 export { goal, goalReport, type GoalReport } from "./goal";
 export { feasible, feasibilityReport, type FeasibilityReport } from "./feasibility";
 export { enumerateFeasibleActions } from "./enumerate";
+export {
+  netFlow,
+  netFlowAt,
+  applyActionToFlow,
+  catnipSeasonalFactor,
+  WORST_CATNIP_SEASON,
+  WORST_CATNIP_WEATHER,
+  WORST_CATNIP_FACTOR,
+} from "./flow";
+export type { FlowSnapshot } from "./state";
 export * from "./catalogs";

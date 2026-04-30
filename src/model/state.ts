@@ -76,6 +76,26 @@ export interface CraftRecipe {
   prices: { name: string; val: number }[];
 }
 
+/**
+ * Per-tick resource flow snapshot. Populated by extract from the engine's
+ * own per-tick numbers so we never re-derive multiplier stacks ourselves.
+ *
+ * `production[r]` and `consumption[r]` are non-negative; `perTick[r]` =
+ * `production[r] - consumption[r]` and matches `gamePage.getResourcePerTick(r)`
+ * within rounding.
+ *
+ * `catnipSeasonalFactor` is the multiplicative factor currently applied to
+ * catnip production due to season + weather (e.g., spring × neutral = 1.5).
+ * Lets `netFlowAt(s, season, weather)` project to a different season without
+ * re-touching the engine.
+ */
+export interface FlowSnapshot {
+  perTick: Record<ResourceName, number>;
+  production: Record<ResourceName, number>;
+  consumption: Record<ResourceName, number>;
+  catnipSeasonalFactor: number;
+}
+
 export interface InformationalState {
   calendar: CalendarState;
   weather: Weather;
@@ -104,6 +124,7 @@ export interface InformationalState {
   // Per-caravan catpower / gold cost (post-discount). Same for every civ.
   tradeManpowerCost: number;
   tradeGoldCost: number;
+  flow: FlowSnapshot;
 }
 
 // ===== Belief state B_t (empty for now) =====

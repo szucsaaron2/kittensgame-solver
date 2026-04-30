@@ -91,6 +91,12 @@ export function initialState(): State {
       ) as unknown as State["info"]["tradeTribute"],
       tradeManpowerCost: 50,
       tradeGoldCost: 15,
+      flow: {
+        perTick: fillNumber(RESOURCE_NAMES, 0),
+        production: fillNumber(RESOURCE_NAMES, 0),
+        consumption: fillNumber(RESOURCE_NAMES, 0),
+        catnipSeasonalFactor: 1.0,
+      },
       unlocked: {
         buildings: fillBool(BUILDING_NAMES, false),
         techs: fillBool(TECH_NAMES, false),

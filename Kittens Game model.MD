@@ -412,3 +412,27 @@ The two-phase decomposition is conceptually cleaner and easier to debug; the sin
 $S_t = (R_t, I_t, B_t)$ with $R_t$ holding resources, buildings, kittens, and embassies; $I_t$ holding the calendar, weather, tech/upgrade/policy bitsets, religion accumulators, diplomacy state, and various cached derived quantities; $B_t$ empty. $x_t$ is a tagged union over $\sim$20 action classes with state-dependent feasibility. $W_{t+1}$ is a sparse record of time advance and a few stochastic outcomes from known distributions. $S^M$ is the engine — apply action, apply exogenous, integrate flows over $\Delta t$. The objective is expected wall-clock time to a completionist goal predicate $G$ that requires $\geq 1$ of every non-paragon/karma building, every reachable tech / workshop / religion bit, a value selected in every policy slot, and max tier in every pact.
 
 Once this is implemented faithfully, the policy class question (PFA vs. CFA vs. VFA vs. DLA, or hybrid) becomes a separate, *solver*-side concern that does not require touching this model.
+
+---
+
+## Appendix A — Catnip per-tick flow (source-of-truth notes)
+
+Authoritative formula in `kittensgame-master/js/game.js:3174-3344` (`calcResourcePerTick`). Tick rate = 5/sec (`game.js:1892`).
+
+**Production sources**
+- `catnipField`: 0.125/tick base (`buildings.js:328`).
+- Farmer job: 1.0/tick base (`village.js:32`), modulated by skill (`village.js:1089-1117`), happiness (`village.js:538`), and leader bonus when leader.job=farmer (`village.js:532, 637-642`).
+
+**Consumption**
+- Per-kitten base: 0.85/tick (`village.js:9, 653`).
+- Pasture/aqueduct/unicorn-pasture/hydroponics apply `catnipDemandRatio` (negative) **multiplicatively** to consumption: `consumption *= (1 + sum_demandRatio)` (`game.js:3314`). Per-unit values: pasture −0.005 (`buildings.js:349`), unicorn pasture −0.0015 (`buildings.js:1956`).
+- When happiness > 1, an extra consumption term fires: `consumption += consumption × max(happiness × (1+hapinnessConsumptionRatio) − 1, 0) × (1 + catnipDemandWorkerRatioGlobal) × (1 − freeKittens/totalKittens)` (`game.js:3315-3322`). Anarchy challenge omits the freeKittens carve-out.
+
+**Multiplier stack (multiplicative across categories, additive within)**
+- Season × weather (`calendar.js:1095-1118`): spring 1.5, summer 1.0, autumn 1.0, winter 0.25; cold −0.15, warm +0.15 added to season.
+- Catnip-specific ratios stacked multiplicatively in order: `catnipGlobalRatio`, `catnipRatio`, `catnipRatioReligion`, `catnipSuperRatio`, `steamworksCatnipRatioGlobal`, paragon production ratio, `catnipPollutionRatio`, solar revolution, CMBR, festival (numeromancy perk only), pyramid global, `catnipPolicyRatio`. See `game.js:3193-3326`.
+
+**Practical implication for our `netFlow(s)`**
+- We do NOT re-derive the multiplier stack. We snapshot `gamePage.getResourcePerTick(name, true)` directly into `state.info.flow.perTick`, then back out catnip consumption with the formula above so we can rescale production by `seasonalFactor` to project to a different season. Consumption is season-independent so it is preserved across projections. Source: `src/simulator/extract.ts`, `src/model/flow.ts`.
+
+**Worst-case season for the guard**: `winter × cold = 0.25 × (1 − 0.15) = 0.2125`.
