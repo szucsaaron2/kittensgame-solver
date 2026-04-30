@@ -149,6 +149,45 @@ describe("apply: wait", () => {
   });
 });
 
+describe("apply: assign", () => {
+  let h: GameHandle | undefined;
+  afterEach(async () => {
+    await h?.teardown();
+    h = undefined;
+  });
+
+  it("places kittens into requested jobs and clears prior assignments", () => {
+    h = setupGame();
+    // Add 5 kittens; they start unassigned.
+    for (let i = 0; i < 5; i++) h.gamePage.village.sim.addKitten();
+    h.gamePage.update();
+
+    apply(h.gamePage, {
+      kind: "assign",
+      jobs: { woodcutter: 2, farmer: 2, scholar: 1 },
+    });
+
+    const after = extract(h.gamePage);
+    expect(after.physical.kittens.jobs.woodcutter).toBe(2);
+    expect(after.physical.kittens.jobs.farmer).toBe(2);
+    expect(after.physical.kittens.jobs.scholar).toBe(1);
+    expect(after.physical.kittens.freeKittens).toBe(0);
+  });
+
+  it("re-assigns when called twice (clears first)", () => {
+    h = setupGame();
+    for (let i = 0; i < 4; i++) h.gamePage.village.sim.addKitten();
+    h.gamePage.update();
+
+    apply(h.gamePage, { kind: "assign", jobs: { woodcutter: 4 } });
+    apply(h.gamePage, { kind: "assign", jobs: { farmer: 4 } });
+
+    const after = extract(h.gamePage);
+    expect(after.physical.kittens.jobs.woodcutter).toBe(0);
+    expect(after.physical.kittens.jobs.farmer).toBe(4);
+  });
+});
+
 describe("apply: gather-catnip", () => {
   let h: GameHandle | undefined;
   afterEach(async () => {

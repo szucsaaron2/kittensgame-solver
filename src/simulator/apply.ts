@@ -343,30 +343,40 @@ function applyPact(g: Any, a: ActionPact): void {
 // -- Village / labour -------------------------------------------------------
 
 function applyAssign(g: Any, a: ActionAssign): void {
-  const sim = g.village.sim;
-  // Strategy: clear all assignments, then assign target counts.
-  const kittens = sim.kittens as Any[];
-  // Step 1: remove from job — game has clearJobs / unassignJob methods.
-  for (const k of kittens) {
-    if (typeof sim.removeJob === "function") {
-      sim.removeJob(k);
-    } else if (k.job) {
+  // village.sim API:
+  //   clearJobs(hard?) — unassign every kitten
+  //   assignJob(jobName, amt) — assign `amt` free kittens to the named job
+  //   removeJob(jobName, amt) — unassign `amt` kittens from the named job
+  // (NOT removeJob(kitten) — earlier draft had this wrong.)
+  const sim = g.village?.sim;
+  if (!sim) throw new Error("village.sim not available");
+
+  if (typeof sim.clearJobs === "function") {
+    sim.clearJobs();
+  } else {
+    for (const k of (sim.kittens as Any[]) ?? []) {
       k.job = null;
     }
   }
-  // Step 2: assign according to target.
-  let idx = 0;
+
   for (const [job, count] of Object.entries(a.jobs)) {
     if (count === undefined || count <= 0) continue;
-    for (let i = 0; i < count; i++) {
-      const k = kittens[idx++];
-      if (!k) break;
-      if (typeof sim.assignJob === "function") {
-        sim.assignJob(job, 1);
-      } else {
-        k.job = job;
+    if (typeof sim.assignJob === "function") {
+      sim.assignJob(job, count);
+    } else {
+      let assigned = 0;
+      for (const k of (sim.kittens as Any[]) ?? []) {
+        if (assigned >= count) break;
+        if (!k.job) {
+          k.job = job;
+          assigned++;
+        }
       }
     }
+  }
+
+  if (typeof g.village?.updateResourceProduction === "function") {
+    g.village.updateResourceProduction();
   }
 }
 

@@ -89,6 +89,7 @@ function renderPanel(lastAction: string, lastResult: string): void {
       btn("ap-goal", "goal") +
       btn("ap-probe", "probe") +
       btn("ap-step", "step", "#dcb47c") +
+      btn("ap-assign", "assign", "#c69ec0") +
       `</div>`,
   ].join("<br>");
   const wire = (id: string, fn: () => void): void => {
@@ -101,6 +102,7 @@ function renderPanel(lastAction: string, lastResult: string): void {
   wire("ap-goal", printGoal);
   wire("ap-probe", printProbe);
   wire("ap-step", stepOnce);
+  wire("ap-assign", assignAllUI);
 }
 
 function fmtAction(a: unknown): string {
@@ -232,6 +234,56 @@ function printProbe(): void {
       typeof cls?.game?.ui?.RefineCatnipButtonController,
   };
   console.log("[autoplayer] controller probe (live page):", probe);
+}
+
+// Assign one specific job. Convenience for testing from the console.
+function assign(jobName: string, count: number): void {
+  try {
+    apply(pageWindow.gamePage, {
+      kind: "assign",
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      jobs: { [jobName]: count } as any,
+    });
+    const s = safeExtract();
+    console.log("[autoplayer] assign result:", s?.physical.kittens);
+  } catch (e) {
+    console.error("[autoplayer] assign failed:", e);
+  }
+}
+
+// Distribute every free kitten evenly across currently-unlocked jobs.
+function assignAllUI(): void {
+  const s = safeExtract();
+  if (!s) return;
+  const unlockedJobs = (Object.entries(s.info.unlocked.jobs) as [string, boolean][])
+    .filter(([, ok]) => ok)
+    .map(([j]) => j);
+  const total = s.physical.kittens.total;
+  if (total === 0) {
+    console.log("[autoplayer] assign: no kittens yet");
+    return;
+  }
+  if (unlockedJobs.length === 0) {
+    console.log("[autoplayer] assign: no unlocked jobs (need a hut first)");
+    return;
+  }
+
+  // Spread evenly. Remainder goes to the first job(s).
+  const baseShare = Math.floor(total / unlockedJobs.length);
+  const remainder = total - baseShare * unlockedJobs.length;
+  const jobs: Record<string, number> = {};
+  unlockedJobs.forEach((j, i) => {
+    jobs[j] = baseShare + (i < remainder ? 1 : 0);
+  });
+  console.log(`[autoplayer] assign: distributing ${total} kittens across`, jobs);
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    apply(pageWindow.gamePage, { kind: "assign", jobs: jobs as any });
+    const after = safeExtract();
+    console.log("[autoplayer] post-assign kittens:", after?.physical.kittens);
+  } catch (e) {
+    console.error("[autoplayer] assignAll failed:", e);
+  }
 }
 
 function stepOnce(): void {
@@ -383,4 +435,15 @@ waitForGame();
 // Expose handles for the dev console — handy if you want to start/stop or
 // inspect stats without touching the panel.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-(pageWindow as any).autoplayer = { start, stop, stats };
+(pageWindow as any).autoplayer = {
+  start,
+  stop,
+  stats,
+  assign, // window.autoplayer.assign("woodcutter", 3)
+  assignAll: assignAllUI,
+  state: () => safeExtract(),
+  actions: () => {
+    const s = safeExtract();
+    return s ? enumerateFeasibleActions(s) : [];
+  },
+};
