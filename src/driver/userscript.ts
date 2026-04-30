@@ -1,7 +1,13 @@
 import { run, type DriverIO } from "./loop";
 import { extract, apply, ApplyError } from "@/simulator";
 import { goal, goalReport, enumerateFeasibleActions } from "@/model";
-import { makeRandomPolicy } from "@/policy";
+import {
+  makeRandomPolicy,
+  runPipeline,
+  recordTrace,
+  recentTraces,
+} from "@/policy";
+import type { State } from "@/model";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 declare const unsafeWindow: any;
@@ -91,6 +97,7 @@ function renderPanel(lastAction: string, lastResult: string): void {
       btn("ap-step", "step", "#dcb47c") +
       btn("ap-assign", "assign", "#c69ec0") +
       btn("ap-verify", "verify", "#dcb47c") +
+      btn("ap-trace", "trace", "#9ec0e0") +
       `</div>`,
   ].join("<br>");
   const wire = (id: string, fn: () => void): void => {
@@ -105,6 +112,15 @@ function renderPanel(lastAction: string, lastResult: string): void {
   wire("ap-step", stepOnce);
   wire("ap-assign", assignAllUI);
   wire("ap-verify", verifyFeasibility);
+  wire("ap-trace", printTrace);
+}
+
+function printTrace(): void {
+  const t = recentTraces();
+  console.log(`[autoplayer] last ${t.length} pipeline decisions:`);
+  for (const e of t.slice(-20)) {
+    console.log(`  L${e.layer} ${e.source}: ${fmtAction(e.action)}`);
+  }
 }
 
 function fmtAction(a: unknown): string {
@@ -451,9 +467,17 @@ function stop(): void {
 }
 
 async function runLoop(): Promise<void> {
-  const policy = makeRandomPolicy();
+  const fallback = makeRandomPolicy();
   let lastAction = "(none yet)";
   let lastResult = "—";
+  let prevState: State | null = null;
+
+  const policy = (s: State) => {
+    const r = runPipeline(s, { prev: prevState, fallback });
+    recordTrace(r.trace);
+    prevState = s;
+    return r.action;
+  };
 
   const io: DriverIO = {
     read: () => extract(pageWindow.gamePage),
