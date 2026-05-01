@@ -219,10 +219,17 @@ export function extract(g: Any): State {
     s.physical.kittens.freeKittens = kittens.length - assigned;
      
     const leader = sim.leader as Any;
-    if (leader && typeof leader.job === "string" && JOB_NAMES.includes(leader.job as JobName)) {
+    if (leader) {
+      // job may be null/empty if the leader was appointed before JobAssignment
+      // routed them into a job. Default to "woodcutter" as a placeholder so
+      // the LeaderState shape remains valid; the actual leader-bonus from
+      // upstream getEffectLeader uses leader.job at *evaluation* time, not
+      // at extract time, so the snapshot's `job` field is informational only.
+      const rawJob = typeof leader.job === "string" ? leader.job : "";
+      const job = JOB_NAMES.includes(rawJob as JobName) ? (rawJob as JobName) : "woodcutter";
       s.physical.kittens.leader = {
-        job: leader.job as JobName,
-         
+        job,
+
         trait: typeof leader.trait?.name === "string" ? leader.trait.name : "",
         rank: num(leader.rank),
         exp: num(leader.exp),

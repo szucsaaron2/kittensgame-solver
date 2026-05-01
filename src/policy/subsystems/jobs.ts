@@ -117,16 +117,38 @@ export function emptyJobVector(): JobVector {
   };
 }
 
+/**
+ * Maximum fraction of kittens we ever route to farmer, even when winter
+ * worst-case demands more. The remainder is reserved for non-farmer
+ * priority jobs (scholar / woodcutter / etc.). Catnip stockpile +
+ * non-winter accumulation cushions the seasonal dip.
+ *
+ * Without this cap, early-game JobAssignment puts every kitten on farmer
+ * (per-kitten consumption × 8 outpaces 8-farmer × winter-multiplier),
+ * which means zero scholars, zero science, no tech research, indefinite
+ * stall. This cap is the "small dip in winter, recover in spring"
+ * tradeoff that lets science get going.
+ */
+const MAX_FARMER_FRACTION = 0.75;
+
 export function chooseJobs(s: State): JobVector {
   const total = s.physical.kittens.total;
   const out = emptyJobVector();
   if (total <= 0) return out;
 
-  const minFarmers = Math.min(total, farmerFloor(s));
+  const ladder = priorityLadder(s);
+  const wantedFloor = farmerFloor(s);
+  // Cap farmer count when there are non-farmer jobs unlocked AND we have
+  // enough kittens to reserve at least one for them. Otherwise (no non-
+  // farmer jobs unlocked, or 1-2 kittens), let the floor stand.
+  const cap =
+    ladder.length > 0 && total >= 2
+      ? Math.max(1, Math.floor(total * MAX_FARMER_FRACTION))
+      : total;
+  const minFarmers = Math.min(total, wantedFloor, cap);
   out.farmer = minFarmers;
   let remaining = total - minFarmers;
 
-  const ladder = priorityLadder(s);
   if (ladder.length === 0) return out; // nothing else unlocked
 
   // Reserve 1 hunter once archery is researched, when we have headroom.

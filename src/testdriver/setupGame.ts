@@ -83,14 +83,14 @@ function bootOnce(): NonNullable<typeof cachedNamespaces> {
 
   const dojo: AnyObj = {
     version: { minor: 6 },
-     
+
     declare: dojoDeclare.declare,
     destroy: () => undefined,
     empty: () => undefined,
     byId: () => undefined,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     forEach: (array: any, predicate: (v: any, i: any) => void) => {
-       
+
       for (const i in array) predicate(array[i], i);
     },
     clone: function clone(m: unknown): unknown {
@@ -99,7 +99,7 @@ function bootOnce(): NonNullable<typeof cachedNamespaces> {
     },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     hitch: (ctx: any, method: any) => {
-       
+
       return method.bind(ctx);
     },
     connect: () => undefined,
@@ -107,6 +107,28 @@ function bootOnce(): NonNullable<typeof cachedNamespaces> {
     subscribe: () => undefined,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     mixin: (obj: any, mixin: any) => Object.assign(obj, mixin),
+    // DOM-mutation stubs: the engine occasionally creates UI nodes
+    // (calendar.js onNewDay → observe button, game.js save tooltip,
+    // various style toggles). In headless mode we have no DOM; return
+    // a permissive sentinel that swallows further property reads/writes.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    create: (..._args: any[]) => ({}),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    place: (..._args: any[]) => undefined,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    style: (..._args: any[]) => undefined,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    attr: (..._args: any[]) => undefined,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    setAttr: (..._args: any[]) => undefined,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    addClass: (..._args: any[]) => undefined,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    removeClass: (..._args: any[]) => undefined,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    toggleClass: (..._args: any[]) => undefined,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    query: (..._args: any[]) => [],
   };
   g.dojo = dojo;
 
@@ -223,6 +245,32 @@ export function setupGame(opts: SetupOptions = {}): GameHandle {
   }
    
   gamePage.resetState();
+
+  // Fire calculateEffects on every village job once. Upstream's job metadata
+  // for scholar / priest / geologist / engineer starts with `modifiers: {}`
+  // and only fills in the real production modifiers (science / faith / coal /
+  // craft) inside `calculateEffects`. The live game's UI render path triggers
+  // this lazily on first paint; in headless mode we never render, so without
+  // this pass scholars produce 0 science, priests produce 0 faith, etc.
+  // upstream village.js: scholar:42-52, priest:87-101, geologist:108-138.
+  type JobMeta = {
+    name: string;
+    modifiers?: Record<string, number>;
+    calculateEffects?: (self: unknown, game: unknown) => void;
+  };
+  const villageJobs = (gamePage as { village?: { jobs?: JobMeta[] } }).village?.jobs;
+  if (Array.isArray(villageJobs)) {
+    for (const job of villageJobs) {
+      try {
+        job.calculateEffects?.(job, gamePage);
+      } catch {
+        // Calc may throw if a referenced workshop/upgrade isn't initialized
+        // yet at boot; the live game retries on subsequent renders. Same here:
+        // the relevant upgrade-driven re-fire (e.g. astrophysicists adding
+        // starchart to scholar) goes through game.upgrade and works correctly.
+      }
+    }
+  }
 
   return {
     gamePage,

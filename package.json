@@ -15,7 +15,8 @@
     "test:integration": "vitest run tests/integration",
     "test:property": "vitest run tests/property",
     "build": "vite build",
-    "dev": "vite build --watch"
+    "dev": "vite build --watch",
+    "headless": "tsx scripts/headless-run.ts"
   },
   "devDependencies": {
     "@types/jsdom": "^28.0.1",

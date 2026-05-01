@@ -262,7 +262,18 @@ function checkAppointLeader(s: State, a: ActionAppointLeader): FeasibilityReport
 
 function checkPromoteLeader(s: State): FeasibilityReport {
   const reasons: string[] = [];
-  if (!s.physical.kittens.leader) reasons.push(`no leader`);
+  const leader = s.physical.kittens.leader;
+  if (!leader) {
+    reasons.push(`no leader`);
+    return { ok: false, reasons };
+  }
+  // Upstream village.js: gold = 25 × (rank+1), exp = 500 × 1.75^rank,
+  // register workshop required (canHaveLeaderOrPromote line 169-171).
+  if (!s.info.workshop.register) reasons.push(`register workshop not researched`);
+  const goldCost = 25 * (leader.rank + 1);
+  const expCost = 500 * Math.pow(1.75, leader.rank);
+  if ((s.physical.resources.gold ?? 0) < goldCost) reasons.push(`gold < ${goldCost}`);
+  if (leader.exp < expCost) reasons.push(`leader exp < ${expCost}`);
   return { ok: reasons.length === 0, reasons };
 }
 
