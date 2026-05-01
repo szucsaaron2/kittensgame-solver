@@ -81,12 +81,17 @@ export function priorityLadder(s: State): JobName[] {
   const push = (j: JobName): void => {
     if (u[j] && j !== "farmer" && !out.includes(j)) out.push(j);
   };
-  // Pre-library / early game: scholar > woodcutter > miner > hunter.
+  // Priority order:
+  //   - scholar first: science gates everything downstream and we
+  //     auto-refine catnip → wood, so woodcutter is partially redundant.
+  //   - miner second: minerals are scarce; refine doesn't produce them.
+  //   - woodcutter third: supplements the refine stream once we're not
+  //     catnip-bound.
+  //   - hunter / priest / geologist / engineer: mid-late additions.
   push("scholar");
-  push("woodcutter");
   push("miner");
+  push("woodcutter");
   push("hunter");
-  // Mid game: priest, geologist, engineer slot in once unlocked.
   push("priest");
   push("geologist");
   push("engineer");

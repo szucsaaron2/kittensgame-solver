@@ -146,6 +146,13 @@ interface Snapshot {
   flowSciencePerTick: number;
   flowCatnipPerTick: number;
   flowWoodPerTick: number;
+  unlockedCrafts: string[];
+  crafted: { furs: number; parchment: number; manuscript: number; compedium: number; blueprint: number };
+  techsResearched: string[];
+  techsUnlockedNotResearched: string[];
+  scienceCap: number;
+  cultureCap: number;
+  faithCap: number;
 }
 
 function snapshot(s: State, tick: number): Snapshot {
@@ -192,6 +199,25 @@ function snapshot(s: State, tick: number): Snapshot {
     flowSciencePerTick: Number((s.info.flow.perTick.science ?? 0).toFixed(4)),
     flowCatnipPerTick: Number((s.info.flow.perTick.catnip ?? 0).toFixed(4)),
     flowWoodPerTick: Number((s.info.flow.perTick.wood ?? 0).toFixed(4)),
+    unlockedCrafts: Object.entries(s.info.unlocked.crafts)
+      .filter(([, v]) => v)
+      .map(([k]) => k),
+    techsResearched: Object.entries(s.info.techs)
+      .filter(([, v]) => v)
+      .map(([k]) => k),
+    techsUnlockedNotResearched: Object.entries(s.info.unlocked.techs)
+      .filter(([k, v]) => v && !s.info.techs[k as keyof typeof s.info.techs])
+      .map(([k]) => k),
+    scienceCap: s.physical.resourceCaps.science,
+    cultureCap: s.physical.resourceCaps.culture,
+    faithCap: s.physical.resourceCaps.faith,
+    crafted: {
+      furs: Math.round(s.physical.resources.furs),
+      parchment: Math.round(s.physical.resources.parchment),
+      manuscript: Math.round(s.physical.resources.manuscript),
+      compedium: Math.round(s.physical.resources.compedium),
+      blueprint: Math.round(s.physical.resources.blueprint),
+    },
   };
 }
 

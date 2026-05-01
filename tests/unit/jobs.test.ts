@@ -102,8 +102,8 @@ describe("JobAssignment subsystem (Phase 6)", () => {
       );
       expect(priorityLadder(s)).toEqual([
         "scholar",
-        "woodcutter",
         "miner",
+        "woodcutter",
         "hunter",
         "priest",
         "geologist",
