@@ -3,6 +3,7 @@ import { extract, apply, ApplyError } from "@/simulator";
 import { goal, goalReport, enumerateFeasibleActions } from "@/model";
 import {
   makeRandomPolicy,
+  makeStrategicPolicy,
   runPipeline,
   recordTrace,
   recentTraces,
@@ -467,7 +468,11 @@ function stop(): void {
 }
 
 async function runLoop(): Promise<void> {
-  const fallback = makeRandomPolicy();
+  // Layer-3 fallback is the strategic building planner with random as its
+  // own internal fallback for non-build moves. Keeps the autoplayer making
+  // sensible build decisions while leaving room for the Phase-11 extension
+  // to handle space / chronoforge / voidspace / pact in the same scorer.
+  const fallback = makeStrategicPolicy();
   let lastAction = "(none yet)";
   let lastResult = "—";
   let prevState: State | null = null;

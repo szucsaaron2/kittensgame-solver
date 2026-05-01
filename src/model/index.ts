@@ -64,10 +64,11 @@ export { projectBuild } from "./projectBuild";
 export {
   unbuiltGoalTTAs,
   goalCompletionTTA,
+  plannerScore,
   infiniteTTAClauseCount,
   cheapestUnbuiltGoalTTA,
 } from "./goalCompletion";
-export type { ClauseTTA } from "./goalCompletion";
+export type { ClauseTTA, PlannerScoreOptions } from "./goalCompletion";
 export { STORAGE_CAP_DELTAS } from "./storageCapDeltas";
 export type { CapDelta } from "./storageCapDeltas";
 export * from "./catalogs";

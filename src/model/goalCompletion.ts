@@ -127,13 +127,50 @@ export function unbuiltGoalTTAs(s: State): ClauseTTA[] {
 /**
  * Sum of TTAs across all finite-TTA unbought goal clauses. Infinite-TTA
  * clauses (storage-gated, locked tech/unbuildable, etc.) are EXCLUDED
- * from the sum. The planner separately uses unblockCount as a tiebreaker
- * when this sum is small but ∞-clauses dominate the actual remaining work.
+ * from the sum. Useful for diagnostics; the planner uses `plannerScore`
+ * which clamps ∞ to a finite proxy and adds a per-flip bonus.
  */
 export function goalCompletionTTA(s: State): number {
   let sum = 0;
   for (const c of unbuiltGoalTTAs(s)) {
     if (Number.isFinite(c.tta)) sum += c.tta;
+  }
+  return sum;
+}
+
+export interface PlannerScoreOptions {
+  /**
+   * Bonus seconds added to every unbought goal-clause's contribution.
+   * Ensures free flips (TTA = 0) score positive savings when removed
+   * from the sum — otherwise the metric is indifferent between taking
+   * a free flip and skipping it. Default 1 second.
+   */
+  perFlipBonus?: number;
+  /**
+   * Finite stand-in value for ∞-TTA clauses. Without this, multipliers
+   * that turn ∞ goals into high-but-finite TTAs would *increase* the
+   * sum (they bring previously-excluded goals back in) and look like
+   * negative savings. With a clamp of, e.g., 86400 (one day), an
+   * unblock action shows the actual finite-TTA difference as savings.
+   * Default 86400.
+   */
+  infProxy?: number;
+}
+
+/**
+ * The metric the strategic planner minimizes. Combines:
+ *   - Finite TTAs of unbought goal-clauses (existing flow / cost picture).
+ *   - A clamp value for ∞ goals so that finite-izing them shows as
+ *     positive savings.
+ *   - A per-flip bonus so that taking a free flip is preferred to
+ *     leaving it on the table.
+ */
+export function plannerScore(s: State, options: PlannerScoreOptions = {}): number {
+  const perFlipBonus = options.perFlipBonus ?? 1;
+  const infProxy = options.infProxy ?? 86400;
+  let sum = 0;
+  for (const c of unbuiltGoalTTAs(s)) {
+    sum += (Number.isFinite(c.tta) ? c.tta : infProxy) + perFlipBonus;
   }
   return sum;
 }

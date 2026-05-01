@@ -114,6 +114,46 @@ The Tampermonkey panel grew over the session. Current buttons:
 
 ---
 
+## Session 6 — Strategic building planner (Phases 7–10)
+
+**Goal:** finish removing the "random Layer-3" gap by extending the reflex layer to cover everything that's monotone-and-cheap (Phase 7-8) and then implementing the actual strategic building planner (Phase 9-10).
+
+### What landed
+
+- **Phase 7 (`?`)** — auto-craft + auto-buy reflexes: craft-beam / craft-slab when raw at cap, auto-research / auto-workshop / auto-religion-upgrade fire-and-forget on first feasible.
+- **Phase 8 (`?` + `3a80f96`)** — hardcoded policy / leader strategy reflexes. Curated `PREFERRED_POLICIES` list (liberty / monarchy / liberalism / theocracy / transkittenism / ...). Auto-appoint kitten-0 as leader; auto-promote-leader gated on real upstream cost (gold + exp + register workshop, NOT manuscripts).
+- **Phase 9 (`?`)** — TTA infrastructure for the planner. New primitives `rawResourceTTA`, `craftDagTTA`, `costTTA` (recursive through the craft DAG), `projectBuild` (pure simulator with cost subtraction + cap raises + flow delta), and `goalCompletionTTA` / `unbuiltGoalTTAs` covering ALL unbought goal-clauses (buildings, techs, workshop, religion, ziggurat, chronoforge, voidspace, space programs).
+- **Phase 10 (`?`)** — strategic building planner. `chooseBuildingAction(s)`: enumerate guarded build candidates, compute savings = ΔplannerScore − cost, pick highest ratio (or highest absolute savings among zero-cost). Wired in as Layer-3 fallback via `makeStrategicPolicy`.
+
+### Plan deviations / refinements
+
+1. **`plannerScore` instead of `goalCompletionTTA` for the planner.** Phase 9's initial `goalCompletionTTA` summed only finite TTAs. That broke free-flip scoring (savings = 0 because the flip's contribution was 0 in T_now and 0 in T_after). Resolved by adding `plannerScore` with two parameters: `perFlipBonus` (default 1, ensures free flips score positive savings) and `infProxy` (default 86400, finite stand-in for ∞ goals so unblockers correctly score). Old `goalCompletionTTA` kept for diagnostics.
+2. **Per-flip bonus subsumes the goal-flip tiebreaker.** With perFlipBonus=1, every clause contributes "tta + 1" to the sum. Removing a clause yields at least +1 savings. No separate tiebreaker logic needed.
+3. **infProxy subsumes the unblocker fallback.** With infProxy=86400, an action that turns ∞ into finite-but-large yields ~85000s savings per finite-ized goal, which dominates other scoring. The unblocker fallback still exists as a safety net but rarely triggers.
+
+### Gotchas discovered
+
+- **wood / thorium overlap.** "wood" is in both `RESOURCE_NAMES` (woodcutter raw production) and `CRAFT_NAMES` (refine-catnip target). Naive recipe-recursion priced wood deficits as 100×catnip per wood, ignoring native woodcutter flow. Fixed by `inputTTA` (prefer raw path when raw is finite) and by `RAW_PRODUCED_OVERLAP` set in `projectBuild.spend`. Same fix covers thorium (raw via reactor + crafted from uranium).
+- **Free flip ambiguity.** A free flip (cost=0, TTA=0) is indistinguishable from "skip" under sum-of-finite-TTAs. Per-flip bonus fixes it cleanly.
+- **`unused 'Action' import.** Lint caught it; removed.
+
+### Test count
+
+264 tests passing at end of Phase 10 (was 199 at start of Session 6). Lint, typecheck, build all green.
+
+### Live behavior change
+
+Layer 3 now picks builds via savings/cost ratio scoring instead of random. Random is used only when the planner stalls (no positive-savings build). The planner ignores non-build moves; for those (gather-catnip, send-explorers, refine-tears, refine-tc) random fallback picks one, which is fine because reflexes preempt anything important.
+
+### Phase 11 candidates
+
+- Extend `projectBuild` to handle `build-space`, `build-chronoforge`, `build-voidspace`, `build-ziggurat`, `space-launch`, `pact`. Each needs its own count-field + cost-vector handling.
+- Just-in-time crafting in the planner: emit explicit bulk-craft action when chosen build needs crafted intermediates we don't have yet.
+- Iterative-deepening 2-step lookahead when 1-step deadlocks on cascading multipliers.
+- Snapshot of discounted prices in extract (workshop upgrade discounts) so cost-TTA matches the engine's actual price.
+
+---
+
 ## Session 5 — Layered policy pipeline (Phases 0–6)
 
 **Goal:** lay down the 4-layer policy architecture (NetFlowGuard / Reflexes / Subsystems / Strategic) as scaffolding so each layer can land independently. Replace the random Layer-3 fallback piecemeal as reflexes / subsystems / scorer come online.
