@@ -58,4 +58,16 @@ export {
   WORST_CATNIP_FACTOR,
 } from "./flow";
 export type { FlowSnapshot } from "./state";
+export { rawResourceTTA, craftDagTTA, costTTA } from "./costTTA";
+export type { CostItem } from "./costTTA";
+export { projectBuild } from "./projectBuild";
+export {
+  unbuiltGoalTTAs,
+  goalCompletionTTA,
+  infiniteTTAClauseCount,
+  cheapestUnbuiltGoalTTA,
+} from "./goalCompletion";
+export type { ClauseTTA } from "./goalCompletion";
+export { STORAGE_CAP_DELTAS } from "./storageCapDeltas";
+export type { CapDelta } from "./storageCapDeltas";
 export * from "./catalogs";
