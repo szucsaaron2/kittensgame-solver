@@ -26,12 +26,20 @@ describe("rawResourceTTA", () => {
     expect(rawResourceTTA(s, "wood", 100)).toBe(Infinity);
   });
 
-  it("returns Infinity when cost exceeds finite cap (storage-gated)", () => {
+  it("returns a finite deficit-proportional TTA when cost exceeds finite cap", () => {
+    // Cap-bound goals get a finite TTA proportional to the cap deficit so
+    // the planner can give partial credit to cap-raising builds. Returning
+    // Infinity here would make single-step lookahead unable to see
+    // cumulative cap-raising as worth pursuing.
     const s = initialState();
     s.physical.resources.wood = 0;
     s.physical.resourceCaps.wood = 50;
     s.info.flow.perTick.wood = 2;
-    expect(rawResourceTTA(s, "wood", 100)).toBe(Infinity);
+    const tta = rawResourceTTA(s, "wood", 100);
+    expect(Number.isFinite(tta)).toBe(true);
+    // Deficit = 100 - 50 = 50, weighted at 1 → contributes 50 seconds.
+    // Plus flow-component cap/flowPerSec = 50 / (2*5) = 5 seconds.
+    expect(tta).toBeCloseTo(55, 4);
   });
 
   it("returns 0 for negative or zero need", () => {

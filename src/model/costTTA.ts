@@ -39,16 +39,39 @@ export function rawResourceTTA(s: State, name: string, need: number): number {
   if (need <= 0) return 0;
   const have = (s.physical.resources as Record<string, number>)[name] ?? 0;
   if (have >= need) return 0;
-  // Storage cap check: if cost exceeds cap, the resource can never be
-  // accumulated to the required level; need a cap-raising build first.
   const cap = (s.physical.resourceCaps as Record<string, number>)[name];
-  if (cap !== undefined && Number.isFinite(cap) && cap < need) return Infinity;
   const flow = s.info.flow.perTick[name as ResourceName] ?? 0;
-  if (flow <= 0) return Infinity;
   // 5 ticks/sec — convert per-tick flow to per-second.
   const flowPerSec = flow * 5;
+  // Storage cap check: if cost exceeds cap, the resource can never be
+  // accumulated past the cap from flow alone — a cap-raising build is
+  // required first. Return a finite deficit-proportional TTA (rather
+  // than Infinity) so the planner gives partial credit to cap-raising
+  // actions even when one build doesn't fully unblock the goal. Without
+  // this, a 20000-cost tech vs an 8750 cap leaves the goal at ∞ forever
+  // and the single-step planner picks no cap-raise (savings stays at 0
+  // because one academy doesn't cross the threshold).
+  if (cap !== undefined && Number.isFinite(cap) && cap < need) {
+    const deficit = need - cap;
+    // Add the flow-time component so a partly-cap-bound goal that's also
+    // flow-bound still has flow-bound contribution.
+    const flowComponent = flowPerSec > 0 ? cap / flowPerSec : 0;
+    return CAP_DEFICIT_WEIGHT * deficit + flowComponent;
+  }
+  if (flow <= 0) return Infinity;
   return (need - have) / flowPerSec;
 }
+
+/**
+ * Seconds-per-unit-of-cap-deficit. Tunes how aggressively the planner
+ * pursues cap-raising vs flow-multipliers. Setting this to 1 makes a
+ * 10000-resource cap deficit worth ~10000 seconds of TTA, comparable to
+ * a multi-game-day tech research wait. Empirically chosen so the
+ * planner picks academy / observatory builds that progressively raise
+ * science cap without overshooting (over-investing in cap to the
+ * detriment of production).
+ */
+const CAP_DEFICIT_WEIGHT = 1;
 
 /**
  * TTA for a single resource need, preferring the raw-production path when
