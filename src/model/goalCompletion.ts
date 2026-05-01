@@ -68,6 +68,9 @@ export function unbuiltGoalTTAs(s: State): ClauseTTA[] {
   for (const b of BUILDING_NAMES) {
     const meta = BUILDING_META[b];
     if (!meta?.inScope) continue;
+    // Skip phantom entries with no cost vector (e.g., usedCryochambers in
+    // voidspace: it's an engine-managed reset artifact, not a buildable item).
+    if (!meta.basePrices || meta.basePrices.length === 0) continue;
     if ((s.physical.buildings[b] ?? 0) >= 1) continue;
     out.push({ kind: "build", name: b, tta: costTTA(s, meta.basePrices) });
   }
@@ -75,6 +78,9 @@ export function unbuiltGoalTTAs(s: State): ClauseTTA[] {
   for (const t of TECH_NAMES) {
     const meta = TECH_META[t];
     if (!meta?.inScope) continue;
+    // Skip phantom entries with no cost vector (e.g., usedCryochambers in
+    // voidspace: it's an engine-managed reset artifact, not a buildable item).
+    if (!meta.basePrices || meta.basePrices.length === 0) continue;
     if (s.info.techs[t]) continue;
     out.push({ kind: "research", name: t, tta: costTTA(s, meta.basePrices) });
   }
@@ -82,6 +88,9 @@ export function unbuiltGoalTTAs(s: State): ClauseTTA[] {
   for (const w of WORKSHOP_NAMES) {
     const meta = WORKSHOP_META[w];
     if (!meta?.inScope) continue;
+    // Skip phantom entries with no cost vector (e.g., usedCryochambers in
+    // voidspace: it's an engine-managed reset artifact, not a buildable item).
+    if (!meta.basePrices || meta.basePrices.length === 0) continue;
     if (s.info.workshop[w]) continue;
     out.push({ kind: "workshop", name: w, tta: costTTA(s, meta.basePrices) });
   }
@@ -89,6 +98,9 @@ export function unbuiltGoalTTAs(s: State): ClauseTTA[] {
   for (const u of RELIGION_UPGRADE_NAMES) {
     const meta = RELIGION_UPGRADE_META[u];
     if (!meta?.inScope) continue;
+    // Skip phantom entries with no cost vector (e.g., usedCryochambers in
+    // voidspace: it's an engine-managed reset artifact, not a buildable item).
+    if (!meta.basePrices || meta.basePrices.length === 0) continue;
     if (s.info.religionUpgrades[u]) continue;
     out.push({ kind: "religion-upgrade", name: u, tta: costTTA(s, meta.basePrices) });
   }
@@ -96,6 +108,9 @@ export function unbuiltGoalTTAs(s: State): ClauseTTA[] {
   for (const z of ZIGGURAT_NAMES) {
     const meta = ZIGGURAT_META[z];
     if (!meta?.inScope) continue;
+    // Skip phantom entries with no cost vector (e.g., usedCryochambers in
+    // voidspace: it's an engine-managed reset artifact, not a buildable item).
+    if (!meta.basePrices || meta.basePrices.length === 0) continue;
     if ((s.physical.zigguratStructures[z] ?? 0) >= 1) continue;
     out.push({ kind: "build-ziggurat", name: z, tta: costTTA(s, meta.basePrices) });
   }
@@ -103,6 +118,9 @@ export function unbuiltGoalTTAs(s: State): ClauseTTA[] {
   for (const c of CHRONOFORGE_NAMES) {
     const meta = CHRONOFORGE_META[c];
     if (!meta?.inScope) continue;
+    // Skip phantom entries with no cost vector (e.g., usedCryochambers in
+    // voidspace: it's an engine-managed reset artifact, not a buildable item).
+    if (!meta.basePrices || meta.basePrices.length === 0) continue;
     if ((s.physical.chronoforge[c] ?? 0) >= 1) continue;
     out.push({ kind: "build-chronoforge", name: c, tta: costTTA(s, meta.basePrices) });
   }
@@ -110,6 +128,9 @@ export function unbuiltGoalTTAs(s: State): ClauseTTA[] {
   for (const v of VOIDSPACE_NAMES) {
     const meta = VOIDSPACE_META[v];
     if (!meta?.inScope) continue;
+    // Skip phantom entries with no cost vector (e.g., usedCryochambers in
+    // voidspace: it's an engine-managed reset artifact, not a buildable item).
+    if (!meta.basePrices || meta.basePrices.length === 0) continue;
     if ((s.physical.voidspace[v] ?? 0) >= 1) continue;
     out.push({ kind: "build-voidspace", name: v, tta: costTTA(s, meta.basePrices) });
   }
@@ -117,6 +138,9 @@ export function unbuiltGoalTTAs(s: State): ClauseTTA[] {
   for (const m of SPACE_PROGRAM_NAMES) {
     const meta = SPACE_PROGRAM_META[m];
     if (!meta?.inScope) continue;
+    // Skip phantom entries with no cost vector (e.g., usedCryochambers in
+    // voidspace: it's an engine-managed reset artifact, not a buildable item).
+    if (!meta.basePrices || meta.basePrices.length === 0) continue;
     if (s.physical.spaceProgramsCompleted[m]) continue;
     out.push({ kind: "space-launch", name: m, tta: costTTA(s, meta.basePrices) });
   }

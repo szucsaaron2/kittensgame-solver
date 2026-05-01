@@ -129,6 +129,26 @@ function bootOnce(): NonNullable<typeof cachedNamespaces> {
     toggleClass: (..._args: any[]) => undefined,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     query: (..._args: any[]) => [],
+    /**
+     * Minimal Deferred shim — upstream uses `new dojo.Deferred()` to bridge
+     * confirmation-required UI callbacks (e.g. policy "are you sure?"
+     * dialogs, iron-will-break warnings). In headless we resolve the
+     * default-yes branch synchronously by invoking the success callback if
+     * any handler is registered, mirroring "user clicks confirm."
+     */
+    Deferred: class {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      private _cb: ((v: any) => void) | null = null;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      then(cb: (v: any) => void): this {
+        this._cb = cb;
+        return this;
+      }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      callback(v: any): void {
+        if (this._cb) this._cb(v);
+      }
+    },
   };
   g.dojo = dojo;
 

@@ -199,7 +199,11 @@ function buyViaController(g: Any, ControllerCtor: Any, modelInit: Any): void {
   const controller = new ControllerCtor(g);
   const model = controller.fetchModel(modelInit);
   controller.updateEnabled(model);
-  const result = controller.buyItem(model, null);
+  // Pass boughtByQueue: true so controllers that gate on confirmation
+  // (policies, iron-will-breaking buildings) take the no-confirmation
+  // branch and proceed synchronously. This matches what the in-game
+  // build-queue does.
+  const result = controller.buyItem(model, { boughtByQueue: true });
   if (result?.itemBought !== true) {
     throw new Error(`buyItem failed: ${result?.reason ?? "unknown"}`);
   }

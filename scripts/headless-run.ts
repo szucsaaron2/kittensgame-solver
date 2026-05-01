@@ -19,8 +19,16 @@ import {
   recordTrace,
   recentTraces,
   makeStrategicPolicy,
+  chooseBuildingAction,
+  type PlannerDebug,
 } from "@/policy";
-import { goal, goalReport, plannerScore } from "@/model";
+import {
+  goal,
+  goalReport,
+  plannerScore,
+  unbuiltGoalTTAs,
+  infiniteTTAClauseCount,
+} from "@/model";
 import type { State, Action } from "@/model";
 import { writeFile } from "node:fs/promises";
 
@@ -32,6 +40,7 @@ interface CliArgs {
   logInterval: number;
   out?: string;
   quiet: boolean;
+  plannerDebug?: boolean;
 }
 
 function parseArgs(): CliArgs {
@@ -74,6 +83,9 @@ function parseArgs(): CliArgs {
         break;
       case "--quiet":
         args.quiet = true;
+        break;
+      case "--planner-debug":
+        args.plannerDebug = true;
         break;
       default:
         // ignore unknown
@@ -253,8 +265,32 @@ async function main(): Promise<void> {
       ticks % args.logInterval === 0 ||
       (ticks <= 1000 && ticks % 100 === 0)
     ) {
-      const snap = snapshot(extract(handle.gamePage), ticks);
+      const snapState = extract(handle.gamePage);
+      const snap = snapshot(snapState, ticks);
       snapshots.push(snap);
+      if (args.plannerDebug) {
+        const debug: PlannerDebug = {
+          candidatesEvaluated: 0,
+          T_now: 0,
+          zeroCostBest: null,
+          positiveRatioBest: null,
+          unblockerBest: null,
+        };
+        const choice = chooseBuildingAction(snapState, debug);
+        const finiteGoals = unbuiltGoalTTAs(snapState).filter((g) => Number.isFinite(g.tta));
+        finiteGoals.sort((a, b) => a.tta - b.tta);
+        const cheapest = finiteGoals.slice(0, 5).map((g) => `${g.kind}:${g.name}=${Math.round(g.tta)}s`);
+        console.log(
+          `  [planner] cands=${debug.candidatesEvaluated} ` +
+            `chose=${choice ? fmtAction(choice) : "null"} ` +
+            `Tnow=${Math.round(debug.T_now)} ` +
+            `inf=${infiniteTTAClauseCount(snapState)} ` +
+            `zero=${debug.zeroCostBest ? fmtAction(debug.zeroCostBest.action) + "/" + Math.round(debug.zeroCostBest.savingsSeconds) + "s" : "-"} ` +
+            `ratio=${debug.positiveRatioBest ? fmtAction(debug.positiveRatioBest.action) + "/" + debug.positiveRatioBest.ratio.toFixed(2) : "-"} ` +
+            `unblock=${debug.unblockerBest ? fmtAction(debug.unblockerBest.action) + "(+" + debug.unblockerBest.deltaInfinite + ")" : "-"}`,
+        );
+        console.log(`  [planner] cheapest finite goals: ${cheapest.join(", ")}`);
+      }
       // Stall detection: same unbuiltGoalClauses for many intervals.
       if (snap.unbuiltGoalClauses === lastUnbuilt) stallStreak++;
       else {
