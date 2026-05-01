@@ -58,39 +58,54 @@ describe("auto-appoint-leader reflex", () => {
 });
 
 describe("auto-promote-leader reflex", () => {
+  function readyState(rank = 0, exp = 1e6, gold = 1e6) {
+    const s = initialState();
+    s.info.workshop.register = true;
+    s.physical.kittens.leader = { job: "scholar", trait: "manager", rank, exp };
+    s.physical.resources.gold = gold;
+    return s;
+  }
+
   it("does not fire without a leader", () => {
     const s = initialState();
+    s.info.workshop.register = true;
     expect(autoPromoteLeaderReflex(s)).toBeNull();
   });
 
-  it("fires when leader exists and manuscripts are above the rank threshold", () => {
-    const s = initialState();
-    s.physical.kittens.leader = { job: "scholar", trait: "manager", rank: 0, exp: 0 };
-    s.physical.resources.manuscript = 200;
+  it("does not fire if `register` workshop upgrade is not researched", () => {
+    const s = readyState();
+    s.info.workshop.register = false;
+    expect(autoPromoteLeaderReflex(s)).toBeNull();
+  });
+
+  it("fires when leader has enough gold and enough exp", () => {
+    const s = readyState(0, 500, 25);
     expect(autoPromoteLeaderReflex(s)).toEqual({ kind: "promote-leader" });
   });
 
-  it("does not fire when manuscripts are below threshold", () => {
-    const s = initialState();
-    s.physical.kittens.leader = { job: "scholar", trait: "manager", rank: 0, exp: 0 };
-    s.physical.resources.manuscript = 50;
+  it("does not fire when gold is short of 25 × (rank+1)", () => {
+    const s = readyState(0, 500, 24);
     expect(autoPromoteLeaderReflex(s)).toBeNull();
   });
 
-  it("threshold scales with rank", () => {
-    const s = initialState();
-    s.physical.kittens.leader = { job: "scholar", trait: "manager", rank: 5, exp: 0 };
-    // threshold = 100 + 5 * 100 = 600
-    s.physical.resources.manuscript = 599;
+  it("does not fire when kitten exp is short of 500 × 1.75^rank", () => {
+    const s = readyState(0, 499, 1e6);
     expect(autoPromoteLeaderReflex(s)).toBeNull();
-    s.physical.resources.manuscript = 600;
+  });
+
+  it("respects rank-scaled costs (rank 3 needs 100 gold and 500×1.75^3 ≈ 2680 exp)", () => {
+    const s = readyState(3, 2700, 100);
     expect(autoPromoteLeaderReflex(s)).toEqual({ kind: "promote-leader" });
+
+    const tooLittleGold = readyState(3, 2700, 99);
+    expect(autoPromoteLeaderReflex(tooLittleGold)).toBeNull();
+
+    const tooLittleExp = readyState(3, 2679, 100);
+    expect(autoPromoteLeaderReflex(tooLittleExp)).toBeNull();
   });
 
   it("caps out at rank 10", () => {
-    const s = initialState();
-    s.physical.kittens.leader = { job: "scholar", trait: "manager", rank: 10, exp: 0 };
-    s.physical.resources.manuscript = 1e9;
+    const s = readyState(10, 1e9, 1e9);
     expect(autoPromoteLeaderReflex(s)).toBeNull();
   });
 });
