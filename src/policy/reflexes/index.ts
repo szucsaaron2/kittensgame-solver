@@ -10,6 +10,9 @@ import { craftSlabReflex } from "./craftSlab";
 import { autoResearchReflex } from "./autoResearch";
 import { autoWorkshopReflex } from "./autoWorkshop";
 import { autoReligionUpgradeReflex } from "./autoReligionUpgrade";
+import { autoPolicyReflex } from "./autoPolicy";
+import { autoAppointLeaderReflex } from "./autoAppointLeader";
+import { autoPromoteLeaderReflex } from "./autoPromoteLeader";
 
 /**
  * Layer 1 reflexes, in priority order. The first reflex whose `fire(s)`
@@ -41,4 +44,7 @@ export const REFLEXES: NamedReflex[] = [
   { name: "auto-research", fire: autoResearchReflex },
   { name: "auto-workshop", fire: autoWorkshopReflex },
   { name: "auto-religion-upgrade", fire: autoReligionUpgradeReflex },
+  { name: "auto-policy", fire: autoPolicyReflex },
+  { name: "auto-appoint-leader", fire: autoAppointLeaderReflex },
+  { name: "auto-promote-leader", fire: autoPromoteLeaderReflex },
 ];
