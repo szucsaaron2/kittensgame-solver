@@ -4,3 +4,5 @@ coverage
 .DS_Store
 *.log
 .vitest-cache
+# Scratch trial outputs from AutoHL runner
+.autohl/scratch/
